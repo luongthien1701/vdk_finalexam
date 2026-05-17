@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Bin — Dashboard</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #0f1117;
+  --bg2:     #181c27;
+  --bg3:     #1e2335;
+  --bg4:     #252b40;
+  --border:  #2a3050;
+  --text:    #e0e4f0;
+  --text2:   #8892b0;
+  --text3:   #4a5580;
+  --wet:     #3b9ede;
+  --dry:     #e8a020;
+  --metal:   #7c6fdb;
+  --green:   #22d987;
+  --red:     #ff5c5c;
+  --amber:   #ffb347;
+  --r:       10px;
+  --r2:      14px;
+}
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── Layout ────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+header {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+.header-left { display: flex; align-items: center; gap: 12px; }
+.logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+.logo span { color: var(--green); }
+.server-info { font-size: 11px; color: var(--text3); font-family: monospace; }
+
+.ws-badge {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; padding: 4px 10px;
+  border-radius: 20px; border: 1px solid var(--border);
+  color: var(--text2);
+  transition: all 0.3s;
+}
+.ws-badge.connected { border-color: #22d98766; color: var(--green); }
+.ws-badge.error     { border-color: #ff5c5c66; color: var(--red); }
+.ws-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ws-badge.connected .ws-dot { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.8)} }
+
+main { padding: 20px 24px; flex: 1; max-width: 1400px; margin: 0 auto; width: 100%; }
+
+/* ── Stats row ─────────────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.stat-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  position: relative; overflow: hidden;
+}
+.stat-card::before {
+  content: ''; position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: var(--accent, var(--text3));
+}
+.stat-val {
+  font-size: 28px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1; margin-bottom: 4px;
+}
+.stat-lbl { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+.stat-sub { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+/* ── Bins ──────────────────────────────────────────────── */
+.bins-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.bin-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  padding: 18px;
+  border-top: 3px solid var(--color);
+  transition: border-color 0.3s;
+}
+.bin-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.bin-ico {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; background: color-mix(in srgb, var(--color) 15%, transparent);
+}
+.bin-title { font-size: 15px; font-weight: 600; }
+.bin-sub   { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+.bin-meter-wrap {
+  display: flex; flex-direction: column; align-items: center; margin-bottom: 14px;
+}
+.bin-meter {
+  width: 52px; height: 130px;
+  background: var(--bg4);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--border);
+  margin: 0 auto 10px;
+}
+.bin-fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  border-radius: 0 0 6px 6px;
+  background: var(--color);
+  transition: height 0.6s cubic-bezier(.4,0,.2,1);
+  opacity: .85;
+}
+.bin-pct  { font-size: 26px; font-weight: 700; color: var(--color); font-variant-numeric: tabular-nums; }
+.bin-status { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.bin-status.warn { color: var(--amber); }
+.bin-status.danger { color: var(--red); }
+
+.bin-row { display: flex; justify-content: space-between; margin-top: 12px; }
+.bin-mini { background: var(--bg3); border-radius: 6px; padding: 6px 8px; text-align: center; flex: 1; }
+.bin-mini:not(:last-child) { margin-right: 6px; }
+.bin-mini .mv { font-size: 13px; font-weight: 600; color: var(--color); }
+.bin-mini .ml { font-size: 10px; color: var(--text3); }
+
+/* ── Bottom grid ───────────────────────────────────────── */
+.bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+}
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  padding: 16px;
+}
+.card-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--text2); text-transform: uppercase;
+  letter-spacing: .6px; margin-bottom: 14px;
+}
+
+/* ── Chart ─────────────────────────────────────────────── */
+.chart-wrap { height: 160px; display: flex; align-items: flex-end; gap: 8px; }
+.bar-group  { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bars       { display: flex; gap: 2px; align-items: flex-end; height: 130px; }
+.bar {
+  width: 14px; border-radius: 3px 3px 0 0;
+  transition: height 0.5s cubic-bezier(.4,0,.2,1);
+  cursor: pointer;
+}
+.bar:hover { opacity: .75; }
+.bar-day { font-size: 10px; color: var(--text3); }
+.chart-legend { display: flex; gap: 14px; margin-top: 12px; }
+.leg { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text2); }
+.leg-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+/* ── Log ───────────────────────────────────────────────── */
+.log-wrap { max-height: 280px; overflow-y: auto; }
+.log-item {
+  display: flex; gap: 8px; padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start; font-size: 12px;
+}
+.log-item:last-child { border: none; }
+.log-dot  { width: 7px; height: 7px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+.log-time { color: var(--text3); font-family: monospace; white-space: nowrap; font-size: 11px; }
+.log-msg  { color: var(--text); flex: 1; line-height: 1.4; }
+.log-tag  {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  flex-shrink: 0; font-weight: 600; align-self: flex-start;
+}
+
+/* ── Motor status ──────────────────────────────────────── */
+.motor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.motor-item {
+  background: var(--bg3); border-radius: 8px; padding: 10px 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.motor-ind { width: 8px; height: 8px; border-radius: 50%; }
+.motor-txt { font-size: 12px; }
+.motor-val { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+
+/* ── Remote Control + Live Sensors ─────────────────────── */
+.control-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ctrl-btn {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all .2s;
+}
+.ctrl-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+.ctrl-btn.danger:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.sensor-mini {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.sensor-mini .label {
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.sensor-mini .value {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 900px) {
+  .control-grid { grid-template-columns: 1fr; }
+  .sensor-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Alert banner ──────────────────────────────────────── */
+#alert-banner {
+  display: none;
+  background: color-mix(in srgb, var(--red) 15%, var(--bg2));
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  border-radius: var(--r);
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+}
+#alert-banner.hidden { display: none; }
+.alert-icon { font-size: 16px; }
+.alert-msg  { flex: 1; }
+.alert-close { cursor: pointer; color: var(--text3); font-size: 16px; line-height: 1; }
+
+/* ── Pulse animation for new events ───────────────────── */
+@keyframes flash { 0%,100%{opacity:1} 50%{opacity:.5} }
+.flash { animation: flash .6s ease-in-out 2; }
+
+/* ── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ── Responsive ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .bins-row { grid-template-columns: 1fr; }
+  .bottom-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  main { padding: 12px; }
+  header { padding: 10px 14px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── Header ────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <div class="logo">Smart<span>Bin</span></div>
+    <div class="server-info">ws://localhost:8765 · CoAP UDP :5683</div>
+  </div>
+  <div id="ws-badge" class="ws-badge">
+    <span class="ws-dot"></span>
+    <span id="ws-status">Đang kết nối...</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Alert banner ──────────────────────────────── -->
+  <div id="alert-banner" class="hidden">
+    <span class="alert-icon">⚠️</span>
+    <span class="alert-msg" id="alert-msg">Cảnh báo</span>
+    <span class="alert-close" onclick="closeAlert()">✕</span>
+  </div>
+
+  <!-- ── Stats row ──────────────────────────────────── -->
+  <div class="stats-grid">
+    <div class="stat-card" style="--accent:#22d987">
+      <div class="stat-val" id="s-total">0</div>
+      <div class="stat-lbl">Tổng phân loại</div>
+      <div class="stat-sub" id="s-today">Hôm nay</div>
+    </div>
+    <div class="stat-card" style="--accent:#3b9ede">
+      <div class="stat-val" id="s-wet">0</div>
+      <div class="stat-lbl">Rác ẩm</div>
+      <div class="stat-sub">lần phân loại</div>
+    </div>
+    <div class="stat-card" style="--accent:#e8a020">
+      <div class="stat-val" id="s-dry">0</div>
+      <div class="stat-lbl">Rác khô</div>
+      <div class="stat-sub">lần phân loại</div>
+    </div>
+    <div class="stat-card" style="--accent:#7c6fdb">
+      <div class="stat-val" id="s-metal">0</div>
+      <div class="stat-lbl">Kim loại</div>
+      <div class="stat-sub">lần phân loại</div>
+    </div>
+    <div class="stat-card" style="--accent:#ffb347">
+      <div class="stat-val"><span id="s-latency">—</span><span style="font-size:14px">ms</span></div>
+      <div class="stat-lbl">Độ trễ CoAP</div>
+      <div class="stat-sub">RTT gần nhất</div>
+    </div>
+    <div class="stat-card" style="--accent:#ff5c5c">
+      <div class="stat-val" id="s-alerts">0</div>
+      <div class="stat-lbl">Cảnh báo</div>
+      <div class="stat-sub">chưa xử lý</div>
+    </div>
+  </div>
+
+
+  <!-- ── Remote Control + Live Sensors ─────────────────── -->
+  <div class="control-grid">
+    <div class="card">
+      <div class="card-title">Điều khiển từ xa qua WebSocket → CoAP command</div>
+      <div class="control-actions">
+        <button class="ctrl-btn" onclick="sendCommand('open_lid')">Mở nắp</button>
+        <button class="ctrl-btn" onclick="sendCommand('close_lid')">Đóng nắp</button>
+        <button class="ctrl-btn" onclick="sendCommand('reset_home')">Reset stepper home</button>
+        <button class="ctrl-btn" onclick="sendCommand('classify_now')">Phân loại ngay</button>
+        <button class="ctrl-btn" onclick="sendCommand('auto_on')">Auto ON</button>
+        <button class="ctrl-btn danger" onclick="sendCommand('auto_off')">Auto OFF</button>
+        <button class="ctrl-btn danger" onclick="resetStats()">Reset thống kê</button>
+      </div>
+      <div style="margin-top:10px;color:var(--text3);font-size:11px">
+        Web gửi lệnh qua WebSocket, server giữ hàng đợi, ESP32 lấy lệnh bằng CoAP GET /bin/command.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Dữ liệu cảm biến realtime</div>
+      <div class="sensor-grid">
+        <div class="sensor-mini">
+          <div class="label">State</div>
+          <div class="value" id="live-state">INIT</div>
+        </div>
+        <div class="sensor-mini">
+          <div class="label">Distance</div>
+          <div class="value"><span id="live-distance">—</span> cm</div>
+        </div>
+        <div class="sensor-mini">
+          <div class="label">Rain</div>
+          <div class="value" id="live-rain">—</div>
+        </div>
+        <div class="sensor-mini">
+          <div class="label">Metal</div>
+          <div class="value" id="live-metal">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 3 Bins ─────────────────────────────────────── -->
+  <div class="bins-row">
+
+    <div class="bin-card" style="--color: var(--wet)">
+      <div class="bin-head">
+        <div class="bin-ico">💧</div>
+        <div>
+          <div class="bin-title">Rác ẩm</div>
+          <div class="bin-sub">Cảm biến độ ẩm / mưa</div>
+        </div>
+      </div>
+      <div class="bin-meter-wrap">
+        <div class="bin-meter"><div class="bin-fill" id="fill-wet" style="height:0%"></div></div>
+        <div class="bin-pct" id="pct-wet">0%</div>
+        <div class="bin-status" id="status-wet">Chờ dữ liệu...</div>
+      </div>
+      <div class="bin-row">
+        <div class="bin-mini" style="--color:var(--wet)">
+          <div class="mv" id="count-wet">0</div><div class="ml">Lần hôm nay</div>
+        </div>
+        <div class="bin-mini" style="--color:var(--wet)">
+          <div class="mv" id="angle-stepper">0°</div><div class="ml">Góc stepper</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bin-card" style="--color: var(--dry)">
+      <div class="bin-head">
+        <div class="bin-ico">📄</div>
+        <div>
+          <div class="bin-title">Rác khô</div>
+          <div class="bin-sub">Không kim loại, không ẩm</div>
+        </div>
+      </div>
+      <div class="bin-meter-wrap">
+        <div class="bin-meter"><div class="bin-fill" id="fill-dry" style="height:0%"></div></div>
+        <div class="bin-pct" id="pct-dry">0%</div>
+        <div class="bin-status" id="status-dry">Chờ dữ liệu...</div>
+      </div>
+      <div class="bin-row">
+        <div class="bin-mini" style="--color:var(--dry)">
+          <div class="mv" id="count-dry">0</div><div class="ml">Lần hôm nay</div>
+        </div>
+        <div class="bin-mini" style="--color:var(--dry)">
+          <div class="mv" id="servo-status">Đóng</div><div class="ml">Servo đáy</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bin-card" style="--color: var(--metal)">
+      <div class="bin-head">
+        <div class="bin-ico">🔩</div>
+        <div>
+          <div class="bin-title">Kim loại</div>
+          <div class="bin-sub">Cảm biến từ / inductive</div>
+        </div>
+      </div>
+      <div class="bin-meter-wrap">
+        <div class="bin-meter"><div class="bin-fill" id="fill-metal" style="height:0%"></div></div>
+        <div class="bin-pct" id="pct-metal">0%</div>
+        <div class="bin-status" id="status-metal">Chờ dữ liệu...</div>
+      </div>
+      <div class="bin-row">
+        <div class="bin-mini" style="--color:var(--metal)">
+          <div class="mv" id="count-metal">0</div><div class="ml">Lần hôm nay</div>
+        </div>
+        <div class="bin-mini" style="--color:var(--metal)">
+          <div class="mv" id="last-type">—</div><div class="ml">Loại vừa nhận</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bottom: Chart + Log ───────────────────────── -->
+  <div class="bottom-grid">
+
+    <div class="card">
+      <div class="card-title">Thống kê 7 ngày</div>
+      <div class="chart-wrap" id="chart-wrap">
+        <!-- JS render -->
+      </div>
+      <div class="chart-legend">
+        <div class="leg"><div class="leg-dot" style="background:var(--wet)"></div>Rác ẩm</div>
+        <div class="leg"><div class="leg-dot" style="background:var(--dry)"></div>Rác khô</div>
+        <div class="leg"><div class="leg-dot" style="background:var(--metal)"></div>Kim loại</div>
+      </div>
+
+      <div style="margin-top:16px">
+        <div class="card-title">Trạng thái thiết bị</div>
+        <div class="motor-row">
+          <div class="motor-item">
+            <div class="motor-ind" id="ind-coap" style="background:var(--text3)"></div>
+            <div>
+              <div class="motor-txt">CoAP Server</div>
+              <div class="motor-val" id="val-coap">Chưa kết nối</div>
+            </div>
+          </div>
+          <div class="motor-item">
+            <div class="motor-ind" id="ind-ws" style="background:var(--text3)"></div>
+            <div>
+              <div class="motor-txt">WebSocket</div>
+              <div class="motor-val" id="val-ws">Đang kết nối</div>
+            </div>
+          </div>
+          <div class="motor-item">
+            <div class="motor-ind" id="ind-stepper" style="background:var(--green)"></div>
+            <div>
+              <div class="motor-txt">Stepper Motor</div>
+              <div class="motor-val" id="val-stepper">0° · Sẵn sàng</div>
+            </div>
+          </div>
+          <div class="motor-item">
+            <div class="motor-ind" id="ind-servo" style="background:var(--green)"></div>
+            <div>
+              <div class="motor-txt">Servo Motor</div>
+              <div class="motor-val" id="val-servo">Đóng · Sẵn sàng</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div class="card-title" style="margin:0">Lịch sử hoạt động</div>
+        <button onclick="clearLog()"
+          style="font-size:11px;padding:4px 8px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer">
+          Xoá
+        </button>
+      </div>
+      <div class="log-wrap" id="log-wrap">
+        <div style="color:var(--text3);font-size:12px;padding:20px 0;text-align:center">
+          Đang chờ dữ liệu từ ESP32...
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────
+const WS_URL = `ws://192.168.133.183:8765`;
+const RECONNECT_DELAY = 3000;
+
+// ── State ───────────────────────────────────────────────────
+let ws = null;
+let reconnectTimer = null;
+let alertCount = 0;
+
+// Biểu đồ 7 ngày (demo data, thay bằng dữ liệu thật từ DB)
+const chartData = [
+  { day: 'T2', wet: 48, dry: 52, metal: 12 },
+  { day: 'T3', wet: 62, dry: 58, metal: 18 },
+  { day: 'T4', wet: 55, dry: 70, metal: 15 },
+  { day: 'T5', wet: 80, dry: 63, metal: 22 },
+  { day: 'T6', wet: 44, dry: 40, metal: 10 },
+  { day: 'T7', wet: 32, dry: 28, metal:  8 },
+  { day: 'Hôm nay', wet: 0, dry: 0, metal: 0 },
+];
+
+// ── WebSocket ────────────────────────────────────────────────
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    setWsBadge('connected', 'Đã kết nối');
+    setIndicator('ind-ws', 'var(--green)');
+    document.getElementById('val-ws').textContent = 'Kết nối thành công';
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onmessage = (e) => {
+    try { handleMessage(JSON.parse(e.data)); }
+    catch (_) {}
+  };
+
+  ws.onclose = () => {
+    setWsBadge('error', 'Mất kết nối');
+    setIndicator('ind-ws', 'var(--red)');
+    document.getElementById('val-ws').textContent = 'Đã ngắt kết nối';
+    reconnectTimer = setTimeout(connectWS, RECONNECT_DELAY);
+  };
+
+  ws.onerror = () => {
+    setWsBadge('error', 'Lỗi kết nối');
+  };
+}
+
+function handleMessage(msg) {
+
+  if (msg.event === 'state') {
+    updateLiveSensors(msg);
+    document.getElementById('val-coap').textContent = `${msg.state || 'STATE'} · ${msg.ts || ''}`;
+    setIndicator('ind-coap', 'var(--green)');
+    addLogEntry('state', msg.ts, true, `Trạng thái hệ thống: ${msg.state || ''} ${msg.message ? '- ' + msg.message : ''}`);
+    if (msg.state === 'DETECTED') {
+      showAlert('ESP32 vừa phát hiện có rác');
+    }
+    return;
+  }
+
+  if (msg.event === 'telemetry') {
+    updateLiveSensors(msg);
+    if (msg.latency_ms !== undefined) document.getElementById('s-latency').textContent = msg.latency_ms;
+    setIndicator('ind-coap', 'var(--green)');
+    document.getElementById('val-coap').textContent = `Telemetry · ${msg.ts || ''}`;
+    return;
+  }
+
+  if (msg.event === 'command_pending') {
+    addLogEntry('state', msg.ts, true, `Server đã nhận lệnh: ${msg.cmd}. Chờ ESP32 lấy qua CoAP.`);
+    return;
+  }
+
+  if (msg.event === 'command_ack') {
+    addLogEntry('state', msg.ts, true, `ESP32 phản hồi lệnh: ${msg.cmd} - ${msg.status}`);
+    return;
+  }
+
+  if (msg.event === 'offline') {
+    showAlert('ESP32 offline hoặc mất kết nối');
+    setIndicator('ind-coap', 'var(--red)');
+    document.getElementById('val-coap').textContent = 'ESP32 offline';
+    return;
+  }
+
+  if (msg.event === 'init') { updateLiveSensors(msg); }
+  if (msg.event === 'init' || msg.event === 'classify' || msg.event === 'level') {
+    if (msg.bins)  updateBins(msg.bins);
+    if (msg.stats) updateStats(msg.stats);
+    if (msg.motor) updateMotor(msg.motor);
+    if (msg.latency_ms !== undefined) document.getElementById('s-latency').textContent = msg.latency_ms;
+    if (msg.type) {
+      const labels = { wet: 'Ẩm', dry: 'Khô', metal: 'KL' };
+      document.getElementById('last-type').textContent = labels[msg.type] || msg.type;
+    }
+    if (msg.event === 'classify') {
+      addLogEntry(msg.type, msg.ts);
+      // Cập nhật biểu đồ hôm nay
+      if (msg.stats) {
+        chartData[6].wet   = msg.stats.wet   || 0;
+        chartData[6].dry   = msg.stats.dry   || 0;
+        chartData[6].metal = msg.stats.metal || 0;
+        renderChart();
+      }
+    }
+    if (msg.history) {
+      msg.history.forEach(h => addLogEntry(h.type, h.ts, false));
+    }
+    setIndicator('ind-coap', 'var(--green)');
+    document.getElementById('val-coap').textContent = 'Nhận dữ liệu OK';
+  }
+
+  if (msg.event === 'alert') {
+    alertCount++;
+    document.getElementById('s-alerts').textContent = alertCount;
+    showAlert(`Thùng ${msg.bin} đầy ${msg.level}% — ${msg.msg}`);
+    addLogEntry('alert', msg.ts, true, msg.msg);
+  }
+
+  if (msg.event === 'stats_reset') {
+    updateStats(msg.stats);
+  }
+}
+
+// ── UI Updates ───────────────────────────────────────────────
+function updateBins(bins) {
+  ['wet', 'dry', 'metal'].forEach(type => {
+    const pct = bins[type] || 0;
+    document.getElementById(`fill-${type}`).style.height = pct + '%';
+    document.getElementById(`pct-${type}`).textContent   = pct + '%';
+    const statusEl = document.getElementById(`status-${type}`);
+    if (pct >= 80) {
+      statusEl.textContent = '⚠️ Sắp đầy — cần thu gom';
+      statusEl.className = 'bin-status danger';
+    } else if (pct >= 60) {
+      statusEl.textContent = '⚡ Đang đầy dần';
+      statusEl.className = 'bin-status warn';
+    } else {
+      statusEl.textContent = '✅ Bình thường';
+      statusEl.className = 'bin-status';
+    }
+  });
+}
+
+function updateStats(stats) {
+  document.getElementById('s-total').textContent = stats.total || 0;
+  document.getElementById('s-wet').textContent   = stats.wet   || 0;
+  document.getElementById('s-dry').textContent   = stats.dry   || 0;
+  document.getElementById('s-metal').textContent = stats.metal || 0;
+  document.getElementById('count-wet').textContent   = stats.wet   || 0;
+  document.getElementById('count-dry').textContent   = stats.dry   || 0;
+  document.getElementById('count-metal').textContent = stats.metal || 0;
+}
+
+function updateMotor(motor) {
+  document.getElementById('angle-stepper').textContent = (motor.stepper_angle || 0) + '°';
+  document.getElementById('servo-status').textContent  =
+    motor.servo === 'open→closed' ? 'Mở→Đóng' : 'Đóng';
+  document.getElementById('val-stepper').textContent =
+    `${motor.stepper_angle || 0}° · Hoàn thành`;
+  document.getElementById('val-servo').textContent =
+    motor.servo === 'open→closed' ? 'Đang mở đáy' : 'Đóng · Sẵn sàng';
+}
+
+// ── Log ──────────────────────────────────────────────────────
+const TYPE_CONFIG = {
+  wet:   { color: 'var(--wet)',   dot: '#3b9ede', label: 'Rác ẩm',   tag: 'ẨM',   tagStyle: 'background:#1a3d5c;color:#3b9ede' },
+  dry:   { color: 'var(--dry)',   dot: '#e8a020', label: 'Rác khô',  tag: 'KHÔ',  tagStyle: 'background:#4a3800;color:#e8a020' },
+  metal: { color: 'var(--metal)', dot: '#7c6fdb', label: 'Kim loại', tag: 'KL',   tagStyle: 'background:#2a2550;color:#7c6fdb' },
+  alert: { color: 'var(--red)',   dot: '#ff5c5c', label: 'Cảnh báo', tag: 'CẢNH BÁO', tagStyle: 'background:#4a1010;color:#ff5c5c' },
+  state: { color: 'var(--green)', dot: '#22d987', label: 'Trạng thái', tag: 'STATE', tagStyle: 'background:#123b2a;color:#22d987' },
+};
+
+let logCount = 0;
+
+function addLogEntry(type, ts, flash = true, customMsg = null) {
+  const wrap = document.getElementById('log-wrap');
+  const cfg  = TYPE_CONFIG[type] || TYPE_CONFIG.dry;
+  const msg  = customMsg || `Phân loại: ${cfg.label} → stepper xoay, servo mở đáy`;
+
+  // Xoá placeholder nếu còn
+  if (logCount === 0) wrap.innerHTML = '';
+  logCount++;
+
+  const div = document.createElement('div');
+  div.className = 'log-item' + (flash ? ' flash' : '');
+  div.innerHTML = `
+    <div class="log-dot" style="background:${cfg.dot}"></div>
+    <span class="log-time">${ts || '--:--:--'}</span>
+    <span class="log-msg">${msg}</span>
+    <span class="log-tag" style="${cfg.tagStyle}">${cfg.tag}</span>
+  `;
+  wrap.insertBefore(div, wrap.firstChild);
+
+  // Giữ tối đa 60 dòng
+  while (wrap.children.length > 60) wrap.removeChild(wrap.lastChild);
+}
+
+function clearLog() {
+  document.getElementById('log-wrap').innerHTML =
+    '<div style="color:var(--text3);font-size:12px;padding:20px 0;text-align:center">Đã xoá lịch sử.</div>';
+  logCount = 0;
+}
+
+// ── Chart ────────────────────────────────────────────────────
+function renderChart() {
+  const wrap = document.getElementById('chart-wrap');
+  wrap.innerHTML = '';
+  const max = Math.max(...chartData.flatMap(d => [d.wet, d.dry, d.metal]), 10);
+
+  chartData.forEach((d, i) => {
+    const isToday = i === chartData.length - 1;
+    const group = document.createElement('div');
+    group.className = 'bar-group';
+
+    const bars = document.createElement('div');
+    bars.className = 'bars';
+
+    [['wet','var(--wet)'], ['dry','var(--dry)'], ['metal','var(--metal)']].forEach(([key, color]) => {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.style.cssText = `height:${Math.max(d[key]/max*120,2)}px;background:${color};opacity:${isToday?1:.65}`;
+      bar.title = `${d.day} ${key}: ${d[key]}`;
+      bars.appendChild(bar);
+    });
+
+    const label = document.createElement('div');
+    label.className = 'bar-day';
+    label.style.fontWeight = isToday ? '600' : '400';
+    label.style.color      = isToday ? 'var(--text)' : 'var(--text3)';
+    label.textContent = d.day;
+
+    group.appendChild(bars);
+    group.appendChild(label);
+    wrap.appendChild(group);
+  });
+}
+
+// ── Alert ────────────────────────────────────────────────────
+function showAlert(msg) {
+  const banner = document.getElementById('alert-banner');
+  document.getElementById('alert-msg').textContent = msg;
+  banner.classList.remove('hidden');
+}
+function closeAlert() {
+  document.getElementById('alert-banner').classList.add('hidden');
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+function setWsBadge(cls, text) {
+  const badge = document.getElementById('ws-badge');
+  badge.className = 'ws-badge ' + cls;
+  document.getElementById('ws-status').textContent = text;
+}
+function setIndicator(id, color) {
+  document.getElementById(id).style.background = color;
+}
+
+
+function updateLiveSensors(msg) {
+  const state = msg.state || msg.current_state;
+  if (state) document.getElementById('live-state').textContent = state;
+
+  const distance = msg.distance_cm ?? msg.telemetry?.distance_cm;
+  if (distance !== undefined) document.getElementById('live-distance').textContent = distance;
+
+  const rain = msg.rain ?? msg.telemetry?.rain;
+  if (rain !== undefined) document.getElementById('live-rain').textContent = rain;
+
+  const metal = msg.metal_detected ?? msg.telemetry?.metal_detected;
+  if (metal !== undefined) document.getElementById('live-metal').textContent = metal ? 'Có' : 'Không';
+
+  if (msg.auto_mode !== undefined) {
+    document.getElementById('val-coap').textContent += msg.auto_mode ? ' · Auto ON' : ' · Auto OFF';
+  }
+}
+
+function sendCommand(cmd) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showAlert('WebSocket chưa kết nối, không gửi được lệnh');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    event: 'command',
+    cmd,
+    device_id: 'smartbin-01',
+    ts: new Date().toISOString()
+  }));
+
+  addLogEntry('state', new Date().toLocaleTimeString('vi-VN'), true, `Đã gửi lệnh từ web: ${cmd}`);
+}
+
+function resetStats() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showAlert('WebSocket chưa kết nối');
+    return;
+  }
+  ws.send(JSON.stringify({ event: 'reset_stats' }));
+}
+
+// ── Init ─────────────────────────────────────────────────────
+renderChart();
+connectWS();
+
+// Cập nhật thời gian header
+setInterval(() => {
+  document.getElementById('s-today').textContent =
+    new Date().toLocaleTimeString('vi-VN');
+}, 1000);
+</script>
+</body>
+</html>
