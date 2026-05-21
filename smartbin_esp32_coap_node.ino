@@ -2,325 +2,253 @@
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <coap-simple.h>
-
 #include <ESP32Servo.h>
 #include <Stepper.h>
 
-// ======================================================
-// WIFI + COAP CONFIG
-// ======================================================
+// ================= CONFIG =================
 
-const char* WIFI_SSID = "banh";
+const char* WIFI_SSID = "ba";
 const char* WIFI_PASS = "123456789";
 
-// Đổi IP này thành IP máy đang chạy Node.js server
-IPAddress SERVER_IP(192, 168, 133, 183);
+IPAddress SERVER_IP(192, 168, 175, 183);
 const int COAP_PORT = 5683;
 
-const char* DEVICE_ID = "smartbin-01";
+#define TRIG_PIN   18
+#define ECHO_PIN   19
+#define METAL_PIN  2
+#define RAIN_PIN   0
+#define SERVO_PIN  3
 
-WiFiUDP udp;
-Coap coap(udp);
-
-// ======================================================
-// PIN CONFIG
-// ======================================================
-
-// HC-SR04
-#define TRIG_PIN 18
-#define ECHO_PIN 19
-
-// Cảm biến kim loại
-#define METAL_PIN 2
-
-// Cảm biến mưa analog
-#define RAIN_PIN 0
-
-// Servo
-#define SERVO_PIN 3
-
-// ULN2003
 #define IN1 4
 #define IN2 5
 #define IN3 6
 #define IN4 7
 
-// ======================================================
-// SENSOR CONFIG
-// ======================================================
-
 const int TRASH_DISTANCE_CM = 5;
 const int RAIN_WET_THRESHOLD = 2500;
+const int DISTANCE_SAMPLES = 7;
 
-const int DISTANCE_SAMPLE_COUNT = 7;
-
-// Khi phát hiện rác thì chờ 3 giây rồi phân loại
-const unsigned long DETECT_WAIT_TIME = 3000;
-
-// Nếu cảm biến kim loại phát hiện kim loại trả LOW thì để true
 const bool METAL_ACTIVE_LOW = true;
 
-// Gửi telemetry định kỳ để web biết ESP32 còn online
-const unsigned long TELEMETRY_INTERVAL = 3000;
+const unsigned long DETECT_WAIT_MS = 3000;
+const unsigned long DROP_WAIT_MS = 1200;
+const unsigned long SERVO_CLOSE_MS = 700;
+const unsigned long TELEMETRY_MS = 3000;
+const unsigned long COMMAND_MS = 1000;
+const unsigned long COAP_GAP_MS = 800;
 
-// ESP32 hỏi server có lệnh điều khiển mới không
-const unsigned long COMMAND_CHECK_INTERVAL = 5000;
+const int SERVO_CLOSE = 180;
+const int SERVO_OPEN = 0;
 
-// Khoảng cách tối thiểu giữa 2 request CoAP
-const unsigned long COAP_GAP_TIME = 800;
+const int STEPS_PER_REV = 2048;
+const int WET_STEPS = STEPS_PER_REV / 3;
+const int METAL_STEPS = (STEPS_PER_REV * 2) / 3;
 
-// ======================================================
-// SERVO CONFIG
-// ======================================================
+// ================= OBJECTS =================
 
+WiFiUDP udp;
+Coap coap(udp);
 Servo lidServo;
+Stepper stepperMotor(STEPS_PER_REV, IN1, IN3, IN2, IN4);
 
-const int SERVO_CLOSE_ANGLE = 180;
-const int SERVO_OPEN_ANGLE = 0;
+// ================= STATE =================
 
-const unsigned long DROP_WAIT_TIME = 1200;
-const unsigned long SERVO_CLOSE_TIME = 700;
-
-// ======================================================
-// STEPPER CONFIG
-// ======================================================
-
-const int STEPS_PER_REVOLUTION = 2048;
-
-Stepper stepperMotor(STEPS_PER_REVOLUTION, IN1, IN3, IN2, IN4);
-
-const int WET_STEPS = STEPS_PER_REVOLUTION / 3;
-const int METAL_STEPS = (STEPS_PER_REVOLUTION * 2) / 3;
-
-// ======================================================
-// STATE MACHINE
-// ======================================================
-
-enum SystemState {
+enum State {
   INIT,
   IDLE,
   DETECTED,
   CLASSIFY,
-  ROTATE_TO_BIN,
-  OPEN_LID,
+  ROTATE,
+  OPEN,
   WAIT_DROP,
-  CLOSE_LID,
-  RETURN_HOME,
+  CLOSE,
+  HOME,
   WAIT_CLEAR
 };
 
-enum TrashType {
-  TRASH_NONE,
-  TRASH_DRY,
-  TRASH_WET,
-  TRASH_METAL
+enum Trash {
+  NONE,
+  DRY,
+  WET,
+  METAL
 };
 
-SystemState currentState = INIT;
-TrashType currentTrash = TRASH_NONE;
+enum Mode {
+  AUTO,
+  MANUAL
+};
 
-unsigned long stateStartTime = 0;
-unsigned long lastTelemetryTime = 0;
-unsigned long lastCommandCheckTime = 0;
-unsigned long lastCoapSendTime = 0;
+State state = INIT;
+Trash trash = NONE;
+Mode mode = AUTO;
 
+unsigned long stateTime = 0;
+unsigned long lastTelemetry = 0;
+unsigned long lastCommand = 0;
+unsigned long lastCoap = 0;
+
+int currentSteps = 0;
 int targetSteps = 0;
-bool autoMode = true;
 
-// ======================================================
-// LAST SENSOR VALUES
-// ======================================================
+long distanceCm = 999;
+int rainValue = 0;
+bool metalDetected = false;
+bool trashDetected = false;
 
-long lastDistance = 999;
-int lastRainValue = 0;
-bool lastMetalDetected = false;
-bool lastTrashDetected = false;
+// ================= NAME =================
 
-// ======================================================
-// HELPER
-// ======================================================
-
-String getStateName(SystemState state) {
-  switch (state) {
+const char* stateText(State s) {
+  switch (s) {
     case INIT: return "INIT";
     case IDLE: return "IDLE";
     case DETECTED: return "DETECTED";
     case CLASSIFY: return "CLASSIFY";
-    case ROTATE_TO_BIN: return "ROTATE_TO_BIN";
-    case OPEN_LID: return "OPEN_LID";
+    case ROTATE: return "ROTATE_TO_BIN";
+    case OPEN: return "OPEN_LID";
     case WAIT_DROP: return "WAIT_DROP";
-    case CLOSE_LID: return "CLOSE_LID";
-    case RETURN_HOME: return "RETURN_HOME";
+    case CLOSE: return "CLOSE_LID";
+    case HOME: return "RETURN_HOME";
     case WAIT_CLEAR: return "WAIT_CLEAR";
     default: return "UNKNOWN";
   }
 }
 
-String getTrashName(TrashType type) {
-  switch (type) {
-    case TRASH_DRY: return "dry";
-    case TRASH_WET: return "wet";
-    case TRASH_METAL: return "metal";
+const char* trashText(Trash t) {
+  switch (t) {
+    case DRY: return "dry";
+    case WET: return "wet";
+    case METAL: return "metal";
     default: return "none";
   }
 }
 
-int getStepperAngle(TrashType type) {
-  switch (type) {
-    case TRASH_WET:
-      return 120;
-    case TRASH_METAL:
-      return 240;
-    case TRASH_DRY:
-    default:
-      return 0;
+bool isAuto() {
+  return mode == AUTO;
+}
+
+// ================= MOTOR =================
+
+void servoOpen() {
+  lidServo.write(SERVO_OPEN);
+}
+
+void servoClose() {
+  lidServo.write(SERVO_CLOSE);
+}
+
+void stepperTo(int steps) {
+  int delta = steps - currentSteps;
+
+  if (delta != 0) {
+    stepperMotor.step(delta);
   }
+
+  currentSteps = steps;
 }
 
-// ======================================================
-// COAP SEND FUNCTIONS
-// ======================================================
-
-bool canSendCoap() {
-  return millis() - lastCoapSendTime >= COAP_GAP_TIME;
+void resetHome() {
+  servoClose();
+  stepperTo(0);
+  trash = NONE;
 }
 
-void markCoapSent() {
-  lastCoapSendTime = millis();
+int stepsOf(Trash t) {
+  if (t == WET) return WET_STEPS;
+  if (t == METAL) return METAL_STEPS;
+  return 0;
 }
 
-bool sendJsonPut(const char* path, JsonDocument& doc) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[CoAP] WiFi not connected, skip PUT");
-    return false;
-  }
+int angleOf(Trash t) {
+  if (t == WET) return 120;
+  if (t == METAL) return 240;
+  return 0;
+}
+
+// ================= COAP =================
+
+bool coapReady() {
+  return millis() - lastCoap >= COAP_GAP_MS;
+}
+
+bool sendPut(const char* path, JsonDocument& doc) {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
   char payload[192];
   size_t len = serializeJson(doc, payload, sizeof(payload));
 
-  if (len == 0) {
-    Serial.println("[CoAP PUT] Serialize failed");
+  if (len == 0 || len >= sizeof(payload) - 1) {
     return false;
   }
 
-  if (len >= sizeof(payload) - 1) {
-    Serial.println("[CoAP PUT] Payload too long, skip");
-    return false;
-  }
-
-  Serial.print("[CoAP PUT] ");
-  Serial.print(path);
-  Serial.print(" len=");
-  Serial.print(len);
-  Serial.print(" ");
-  Serial.println(payload);
-
-  // KHÔNG thêm "/" đầu path vì coap-simple có thể tự thêm
   coap.put(SERVER_IP, COAP_PORT, path, payload);
+  lastCoap = millis();
 
-  markCoapSent();
   return true;
 }
 
-void sendStateToServer(const char* message) {
-  StaticJsonDocument<160> doc;
-
-  // key ngắn:
-  // s=state, tt=trash_type, d=distance, r=rain, m=metal, t=trash_detected, a=auto, msg=message
-  doc["s"] = getStateName(currentState);
-  doc["tt"] = getTrashName(currentTrash);
-  doc["d"] = lastDistance;
-  doc["r"] = lastRainValue;
-  doc["m"] = lastMetalDetected ? 1 : 0;
-  doc["t"] = lastTrashDetected ? 1 : 0;
-  doc["a"] = autoMode ? 1 : 0;
-  doc["msg"] = message;
-
-  sendJsonPut("bin/state", doc);
+void addStatus(JsonDocument& doc) {
+  doc["s"] = stateText(state);
+  doc["d"] = distanceCm;
+  doc["r"] = rainValue;
+  doc["m"] = metalDetected ? 1 : 0;
+  doc["t"] = trashDetected ? 1 : 0;
+  doc["a"] = isAuto() ? 1 : 0;
 }
 
-void sendTelemetryToServer() {
+void sendState(const char* msg) {
+  StaticJsonDocument<160> doc;
+
+  addStatus(doc);
+  doc["tt"] = trashText(trash);
+  doc["msg"] = msg;
+
+  sendPut("bin/state", doc);
+}
+
+void sendTelemetry() {
   StaticJsonDocument<128> doc;
 
-  // key ngắn:
-  // s=state, d=distance, r=rain, m=metal, t=trash_detected, a=auto
-  doc["s"] = getStateName(currentState);
-  doc["d"] = lastDistance;
-  doc["r"] = lastRainValue;
-  doc["m"] = lastMetalDetected ? 1 : 0;
-  doc["t"] = lastTrashDetected ? 1 : 0;
-  doc["a"] = autoMode ? 1 : 0;
+  addStatus(doc);
 
-  sendJsonPut("bin/telemetry", doc);
+  sendPut("bin/telemetry", doc);
 }
 
-void sendClassifyToServer() {
+void sendClassify() {
   StaticJsonDocument<160> doc;
 
-  // key ngắn:
-  // ty=type, s=state, d=distance, r=rain, m=metal, ang=stepper_angle, sv=servo
-  doc["ty"] = getTrashName(currentTrash);
-  doc["s"] = getStateName(currentState);
-  doc["d"] = lastDistance;
-  doc["r"] = lastRainValue;
-  doc["m"] = lastMetalDetected ? 1 : 0;
-  doc["ang"] = getStepperAngle(currentTrash);
-  doc["sv"] = "oc"; // open→closed
+  doc["ty"] = trashText(trash);
+  doc["s"] = stateText(state);
+  doc["d"] = distanceCm;
+  doc["r"] = rainValue;
+  doc["m"] = metalDetected ? 1 : 0;
+  doc["ang"] = angleOf(trash);
+  doc["sv"] = "oc";
 
-  sendJsonPut("bin/classify", doc);
+  sendPut("bin/classify", doc);
 }
 
-void sendCommandAck(const String& id, const String& cmd, const String& status, const String& msg = "") {
+void sendAck(const String& id, const String& cmd, const char* status, const char* msg) {
   StaticJsonDocument<160> doc;
 
-  // cid=command id, cmd=command, st=status, msg=message
   doc["cid"] = id;
   doc["cmd"] = cmd;
   doc["st"] = status;
   doc["msg"] = msg;
 
-  sendJsonPut("bin/command_ack", doc);
+  sendPut("bin/command_ack", doc);
 }
 
-bool checkCommandFromServer() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[CoAP GET] WiFi not connected, skip");
-    return false;
-  }
+void getCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!coapReady()) return;
 
-  if (!canSendCoap()) {
-    Serial.println("[CoAP GET] Skip busy");
-    return false;
-  }
-
-  Serial.println("[CoAP GET] bin/command");
-
-  // KHÔNG thêm "/" đầu path vì coap-simple có thể tự thêm
   coap.get(SERVER_IP, COAP_PORT, "bin/command");
-
-  markCoapSent();
-  return true;
+  lastCoap = millis();
 }
 
-// ======================================================
-// STATE CHANGE
-// ======================================================
+// ================= SENSOR =================
 
-void changeState(SystemState newState) {
-  currentState = newState;
-  stateStartTime = millis();
-
-  Serial.print("State changed to: ");
-  Serial.println(getStateName(newState));
-
-  sendStateToServer("State changed");
-}
-
-// ======================================================
-// SENSOR FUNCTIONS
-// ======================================================
-
-long readDistanceCM() {
+long readDistanceOnce() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
 
@@ -330,32 +258,28 @@ long readDistanceCM() {
   digitalWrite(TRIG_PIN, LOW);
 
   long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return -1;
 
-  if (duration == 0) {
-    return -1;
-  }
-
-  long distance = duration * 0.034 / 2;
-  return distance;
+  return duration * 0.034 / 2;
 }
 
-void sortArray(long arr[], int size) {
-  for (int i = 0; i < size - 1; i++) {
-    for (int j = i + 1; j < size; j++) {
+void sortLong(long arr[], int n) {
+  for (int i = 0; i < n - 1; i++) {
+    for (int j = i + 1; j < n; j++) {
       if (arr[i] > arr[j]) {
-        long temp = arr[i];
+        long tmp = arr[i];
         arr[i] = arr[j];
-        arr[j] = temp;
+        arr[j] = tmp;
       }
     }
   }
 }
 
-long readDistanceMedianCM() {
-  long samples[DISTANCE_SAMPLE_COUNT];
+long readDistance() {
+  long samples[DISTANCE_SAMPLES];
 
-  for (int i = 0; i < DISTANCE_SAMPLE_COUNT; i++) {
-    samples[i] = readDistanceCM();
+  for (int i = 0; i < DISTANCE_SAMPLES; i++) {
+    samples[i] = readDistanceOnce();
 
     if (samples[i] <= 0) {
       samples[i] = 999;
@@ -364,234 +288,375 @@ long readDistanceMedianCM() {
     delay(30);
   }
 
-  sortArray(samples, DISTANCE_SAMPLE_COUNT);
+  sortLong(samples, DISTANCE_SAMPLES);
 
-  long median = samples[DISTANCE_SAMPLE_COUNT / 2];
-
-  lastDistance = median;
-  return median;
+  distanceCm = samples[DISTANCE_SAMPLES / 2];
+  return distanceCm;
 }
 
-bool hasTrashMedian() {
-  long distance = readDistanceMedianCM();
+bool hasTrash() {
+  readDistance();
 
-  lastTrashDetected = distance > 0 && distance <= TRASH_DISTANCE_CM;
-  return lastTrashDetected;
+  trashDetected = distanceCm > 0 && distanceCm <= TRASH_DISTANCE_CM;
+  return trashDetected;
 }
 
-bool isMetalTrash() {
+bool readMetal() {
   int value = digitalRead(METAL_PIN);
 
-  Serial.print("Metal value: ");
-  Serial.println(value);
-
-  if (METAL_ACTIVE_LOW) {
-    lastMetalDetected = value == LOW;
-  } else {
-    lastMetalDetected = value == HIGH;
-  }
-
-  return lastMetalDetected;
+  metalDetected = METAL_ACTIVE_LOW ? value == LOW : value == HIGH;
+  return metalDetected;
 }
 
-bool isWetTrash() {
-  int rainValue = analogRead(RAIN_PIN);
-
-  lastRainValue = rainValue;
-
-  Serial.print("Rain value: ");
-  Serial.println(rainValue);
-
+bool readWet() {
+  rainValue = analogRead(RAIN_PIN);
   return rainValue < RAIN_WET_THRESHOLD;
 }
 
-// ======================================================
-// CLASSIFY
-// ======================================================
-
-TrashType classifyTrash() {
-  bool metal = isMetalTrash();
-  bool wet = isWetTrash();
-
-  if (metal) {
-    return TRASH_METAL;
-  }
-
-  if (wet) {
-    return TRASH_WET;
-  }
-
-  return TRASH_DRY;
+Trash classifyTrash() {
+  if (readMetal()) return METAL;
+  if (readWet()) return WET;
+  return DRY;
 }
 
-int getTargetSteps(TrashType type) {
-  switch (type) {
-    case TRASH_DRY:
-      return 0;
+// ================= MAIN STATE MACHINE =================
 
-    case TRASH_WET:
-      return WET_STEPS;
+void go(State next, const char* msg = "State changed") {
+  state = next;
+  stateTime = millis();
 
-    case TRASH_METAL:
-      return METAL_STEPS;
+  sendState(msg);
+}
+
+void runStateMachine() {
+  switch (state) {
+    case INIT:
+      resetHome();
+      rainValue = analogRead(RAIN_PIN);
+      readMetal();
+      readDistance();
+      go(IDLE);
+      break;
+
+    case IDLE:
+      trash = NONE;
+
+      if (isAuto() && hasTrash()) {
+        go(DETECTED, "Trash detected");
+      }
+      break;
+
+    case DETECTED:
+      if (millis() - stateTime >= DETECT_WAIT_MS) {
+        go(CLASSIFY, "Start classify");
+      }
+      break;
+
+    case CLASSIFY:
+      trash = classifyTrash();
+      targetSteps = stepsOf(trash);
+
+      sendState("Trash classified");
+      sendClassify();
+
+      go(ROTATE);
+      break;
+
+    case ROTATE:
+      stepperTo(targetSteps);
+      go(OPEN);
+      break;
+
+    case OPEN:
+      servoOpen();
+      go(WAIT_DROP);
+      break;
+
+    case WAIT_DROP:
+      if (millis() - stateTime >= DROP_WAIT_MS) {
+        go(CLOSE);
+      }
+      break;
+
+    case CLOSE:
+      servoClose();
+      go(HOME);
+      break;
+
+    case HOME:
+      if (millis() - stateTime >= SERVO_CLOSE_MS) {
+        stepperTo(0);
+        go(WAIT_CLEAR);
+      }
+      break;
+
+    case WAIT_CLEAR:
+      if (!hasTrash()) {
+        trashDetected = false;
+        go(IDLE, "Trash cleared");
+      }
+      break;
+  }
+}
+
+// ================= COMMAND FSM =================
+
+enum CommandType {
+  CMD_NONE,
+  CMD_AUTO,
+  CMD_MANUAL,
+  CMD_OPEN_LID,
+  CMD_CLOSE_LID,
+  CMD_RESET_HOME,
+  CMD_CLASSIFY_NOW,
+  CMD_ROTATE_DRY,
+  CMD_ROTATE_WET,
+  CMD_ROTATE_METAL,
+  CMD_UNKNOWN
+};
+
+enum CommandState {
+  CMD_RECEIVED,
+  CMD_VALIDATE,
+  CMD_EXECUTE,
+  CMD_ACK,
+  CMD_DONE
+};
+
+struct CommandContext {
+  String id;
+  String raw;
+  CommandType type = CMD_NONE;
+  CommandState state = CMD_RECEIVED;
+
+  const char* ackStatus = "done";
+  const char* ackMsg = "";
+};
+
+CommandType parseCommand(const String& cmd) {
+  if (cmd == "auto_on" || cmd == "mode_auto") return CMD_AUTO;
+  if (cmd == "auto_off" || cmd == "manual_on" || cmd == "mode_manual") return CMD_MANUAL;
+  if (cmd == "open_lid") return CMD_OPEN_LID;
+  if (cmd == "close_lid") return CMD_CLOSE_LID;
+  if (cmd == "reset_home") return CMD_RESET_HOME;
+  if (cmd == "classify_now") return CMD_CLASSIFY_NOW;
+  if (cmd == "rotate_dry") return CMD_ROTATE_DRY;
+  if (cmd == "rotate_wet") return CMD_ROTATE_WET;
+  if (cmd == "rotate_metal") return CMD_ROTATE_METAL;
+
+  return CMD_UNKNOWN;
+}
+
+bool isRotateCommand(CommandType type) {
+  return type == CMD_ROTATE_DRY ||
+         type == CMD_ROTATE_WET ||
+         type == CMD_ROTATE_METAL;
+}
+
+Trash trashFromCommand(CommandType type) {
+  if (type == CMD_ROTATE_WET) return WET;
+  if (type == CMD_ROTATE_METAL) return METAL;
+  return DRY;
+}
+
+void setCommandResult(CommandContext& ctx, const char* status, const char* msg) {
+  ctx.ackStatus = status;
+  ctx.ackMsg = msg;
+}
+
+void validateCommand(CommandContext& ctx) {
+  if (ctx.type == CMD_UNKNOWN) {
+    setCommandResult(ctx, "unknown", "Unknown command");
+    ctx.state = CMD_ACK;
+    return;
+  }
+
+  if (isRotateCommand(ctx.type) && isAuto()) {
+    setCommandResult(ctx, "ignored", "Switch to Manual first");
+    ctx.state = CMD_ACK;
+    return;
+  }
+
+  if (ctx.type == CMD_CLASSIFY_NOW) {
+    if (!isAuto()) {
+      setCommandResult(ctx, "ignored", "Only in AUTO mode");
+      ctx.state = CMD_ACK;
+      return;
+    }
+
+    if (!(state == IDLE || state == WAIT_CLEAR)) {
+      setCommandResult(ctx, "ignored", "System busy");
+      ctx.state = CMD_ACK;
+      return;
+    }
+  }
+
+  ctx.state = CMD_EXECUTE;
+}
+
+void executeCommand(CommandContext& ctx) {
+  switch (ctx.type) {
+    case CMD_AUTO:
+      mode = AUTO;
+      resetHome();
+      state = IDLE;
+      sendState("Mode changed to AUTO");
+      setCommandResult(ctx, "done", "Auto mode enabled");
+      break;
+
+    case CMD_MANUAL:
+      mode = MANUAL;
+      resetHome();
+      state = IDLE;
+      sendState("Mode changed to MANUAL");
+      setCommandResult(ctx, "done", "Manual mode enabled");
+      break;
+
+    case CMD_OPEN_LID:
+      servoOpen();
+      sendState("Remote open lid");
+      setCommandResult(ctx, "done", "Servo opened");
+      break;
+
+    case CMD_CLOSE_LID:
+      servoClose();
+      sendState("Remote close lid");
+      setCommandResult(ctx, "done", "Servo closed");
+      break;
+
+    case CMD_RESET_HOME:
+      resetHome();
+      sendState("Remote reset home");
+      setCommandResult(ctx, "done", "Returned home");
+      break;
+
+    case CMD_CLASSIFY_NOW:
+      go(CLASSIFY, "Force classify");
+      setCommandResult(ctx, "accepted", "Classify accepted");
+      break;
+
+    case CMD_ROTATE_DRY:
+    case CMD_ROTATE_WET:
+    case CMD_ROTATE_METAL:
+      trash = trashFromCommand(ctx.type);
+      stepperTo(stepsOf(trash));
+      sendState("Manual rotate");
+      setCommandResult(ctx, "done", trashText(trash));
+      break;
 
     default:
-      return 0;
+      setCommandResult(ctx, "unknown", "Unknown command");
+      break;
+  }
+
+  ctx.state = CMD_ACK;
+}
+
+void runCommandFSM(CommandContext& ctx) {
+  while (ctx.state != CMD_DONE) {
+    switch (ctx.state) {
+      case CMD_RECEIVED:
+        ctx.type = parseCommand(ctx.raw);
+        ctx.state = CMD_VALIDATE;
+        break;
+
+      case CMD_VALIDATE:
+        validateCommand(ctx);
+        break;
+
+      case CMD_EXECUTE:
+        executeCommand(ctx);
+        break;
+
+      case CMD_ACK:
+        sendAck(ctx.id, ctx.raw, ctx.ackStatus, ctx.ackMsg);
+        ctx.state = CMD_DONE;
+        break;
+
+      case CMD_DONE:
+        break;
+    }
   }
 }
 
-// ======================================================
-// REMOTE COMMAND
-// ======================================================
+void handleCommand(const String& id, const String& cmd) {
+  CommandContext ctx;
 
-void handleRemoteCommand(const String& id, const String& cmd) {
-  Serial.print("[CMD] ");
-  Serial.println(cmd);
+  ctx.id = id;
+  ctx.raw = cmd;
+  ctx.state = CMD_RECEIVED;
 
-  if (cmd == "open_lid") {
-    lidServo.write(SERVO_OPEN_ANGLE);
-    sendCommandAck(id, cmd, "done", "Servo opened");
-    sendStateToServer("Remote command: open_lid");
-    return;
-  }
-
-  if (cmd == "close_lid") {
-    lidServo.write(SERVO_CLOSE_ANGLE);
-    sendCommandAck(id, cmd, "done", "Servo closed");
-    sendStateToServer("Remote command: close_lid");
-    return;
-  }
-
-  if (cmd == "auto_on") {
-    autoMode = true;
-    sendCommandAck(id, cmd, "done", "Auto mode enabled");
-    sendStateToServer("Remote command: auto_on");
-    return;
-  }
-
-  if (cmd == "auto_off") {
-    autoMode = false;
-    sendCommandAck(id, cmd, "done", "Auto mode disabled");
-    sendStateToServer("Remote command: auto_off");
-    return;
-  }
-
-  if (cmd == "reset_home") {
-    if (targetSteps != 0) {
-      stepperMotor.step(-targetSteps);
-      targetSteps = 0;
-    }
-
-    currentTrash = TRASH_NONE;
-    sendCommandAck(id, cmd, "done", "Stepper returned home");
-    sendStateToServer("Remote command: reset_home");
-    return;
-  }
-
-  if (cmd == "classify_now") {
-    if (currentState == IDLE || currentState == WAIT_CLEAR) {
-      changeState(CLASSIFY);
-      sendCommandAck(id, cmd, "accepted", "Force classify accepted");
-    } else {
-      sendCommandAck(id, cmd, "ignored", "System is busy");
-    }
-    return;
-  }
-
-  sendCommandAck(id, cmd, "unknown", "Unknown command");
+  runCommandFSM(ctx);
 }
+
+// ================= COAP RESPONSE =================
 
 void onCoapResponse(CoapPacket& packet, IPAddress ip, int port) {
-  String payload = "";
+  String payload;
 
   for (int i = 0; i < packet.payloadlen; i++) {
     payload += (char)packet.payload[i];
   }
 
-  if (payload.length() == 0) {
-    return;
-  }
-
-  Serial.print("[CoAP RESPONSE FROM] ");
-  Serial.print(ip);
-  Serial.print(":");
-  Serial.println(port);
-
-  Serial.print("[CoAP RESPONSE] ");
-  Serial.println(payload);
+  if (payload.length() == 0) return;
 
   StaticJsonDocument<384> doc;
-  DeserializationError error = deserializeJson(doc, payload);
 
-  if (error) {
-    Serial.println("[CoAP RESPONSE] Invalid JSON");
+  if (deserializeJson(doc, payload)) {
     return;
   }
 
   bool hasCommand = doc["has_command"] | false;
-
-  if (!hasCommand) {
-    return;
-  }
+  if (!hasCommand) return;
 
   String id = doc["id"] | "";
   String cmd = doc["cmd"] | "";
 
   if (cmd.length() > 0) {
-    handleRemoteCommand(id, cmd);
+    handleCommand(id, cmd);
   }
 }
 
-// ======================================================
-// WIFI
-// ======================================================
+// ================= WIFI =================
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  Serial.print("Connecting WiFi");
+  unsigned long start = millis();
 
-  unsigned long startAttempt = millis();
-
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
     delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi connected. IP: ");
-    Serial.println(WiFi.localIP());
-
-    Serial.print("Server IP: ");
-    Serial.println(SERVER_IP);
-
-    Serial.print("Gateway IP: ");
-    Serial.println(WiFi.gatewayIP());
-
-    Serial.print("Subnet mask: ");
-    Serial.println(WiFi.subnetMask());
-  } else {
-    Serial.println("WiFi connect failed. System still runs offline.");
   }
 }
 
-// ======================================================
-// SETUP
-// ======================================================
+// ================= PERIODIC =================
+
+void runPeriodicTasks() {
+  unsigned long now = millis();
+
+  if (now - lastTelemetry >= TELEMETRY_MS) {
+    lastTelemetry = now;
+    sendTelemetry();
+    return;
+  }
+
+  if (now - lastCommand >= COMMAND_MS) {
+    lastCommand = now;
+    getCommand();
+    return;
+  }
+}
+
+// ================= SETUP + LOOP =================
 
 void setup() {
-  Serial.begin(115200);
-
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-
   pinMode(METAL_PIN, INPUT_PULLUP);
 
   lidServo.attach(SERVO_PIN);
-  lidServo.write(SERVO_CLOSE_ANGLE);
+  servoClose();
 
   stepperMotor.setSpeed(10);
 
@@ -600,132 +665,12 @@ void setup() {
   coap.response(onCoapResponse);
   coap.start();
 
-  changeState(INIT);
-
-  Serial.println("Smart Trash System Ready - CoAP State Machine Mode");
+  go(INIT);
 }
-
-// ======================================================
-// LOOP STATE MACHINE
-// ======================================================
 
 void loop() {
   coap.loop();
 
-  unsigned long now = millis();
-  bool sentCoapThisLoop = false;
-
-  // Ưu tiên telemetry trước
-  if (now - lastTelemetryTime >= TELEMETRY_INTERVAL) {
-    lastTelemetryTime = now;
-    sendTelemetryToServer();
-    sentCoapThisLoop = true;
-  }
-
-  // GET command chỉ chạy khi không vừa gửi PUT, tránh đè request
-  if (!sentCoapThisLoop && now - lastCommandCheckTime >= COMMAND_CHECK_INTERVAL) {
-    lastCommandCheckTime = now;
-    checkCommandFromServer();
-    sentCoapThisLoop = true;
-  }
-
-  switch (currentState) {
-    case INIT:
-      currentTrash = TRASH_NONE;
-      targetSteps = 0;
-      lidServo.write(SERVO_CLOSE_ANGLE);
-      lastRainValue = analogRead(RAIN_PIN);
-      isMetalTrash();
-      readDistanceMedianCM();
-
-      Serial.println("Init done.");
-      changeState(IDLE);
-      break;
-
-    case IDLE:
-      currentTrash = TRASH_NONE;
-      targetSteps = 0;
-
-      if (autoMode && hasTrashMedian()) {
-        Serial.println("Detected trash. Wait 3 seconds before classify...");
-        changeState(DETECTED);
-      }
-      break;
-
-    case DETECTED:
-      if (millis() - stateStartTime >= DETECT_WAIT_TIME) {
-        Serial.println("Wait done. Start classify.");
-        changeState(CLASSIFY);
-      }
-      break;
-
-    case CLASSIFY:
-      currentTrash = classifyTrash();
-      targetSteps = getTargetSteps(currentTrash);
-
-      Serial.print("Trash type: ");
-      Serial.println(getTrashName(currentTrash));
-
-      sendStateToServer("Trash classified");
-
-      // Gửi kết quả phân loại ngay để web cập nhật thống kê
-      sendClassifyToServer();
-
-      changeState(ROTATE_TO_BIN);
-      break;
-
-    case ROTATE_TO_BIN:
-      if (targetSteps != 0) {
-        Serial.print("Rotate to bin, steps: ");
-        Serial.println(targetSteps);
-
-        stepperMotor.step(targetSteps);
-      } else {
-        Serial.println("Dry trash: stepper stay home");
-      }
-
-      changeState(OPEN_LID);
-      break;
-
-    case OPEN_LID:
-      Serial.println("Open lid");
-      lidServo.write(SERVO_OPEN_ANGLE);
-      changeState(WAIT_DROP);
-      break;
-
-    case WAIT_DROP:
-      if (millis() - stateStartTime >= DROP_WAIT_TIME) {
-        changeState(CLOSE_LID);
-      }
-      break;
-
-    case CLOSE_LID:
-      Serial.println("Close lid");
-      lidServo.write(SERVO_CLOSE_ANGLE);
-
-      // Không gọi sendClassifyToServer ở đây nữa để tránh cộng 2 lần
-      changeState(RETURN_HOME);
-      break;
-
-    case RETURN_HOME:
-      if (millis() - stateStartTime >= SERVO_CLOSE_TIME) {
-        if (targetSteps != 0) {
-          Serial.print("Return home, steps: ");
-          Serial.println(-targetSteps);
-
-          stepperMotor.step(-targetSteps);
-        }
-
-        changeState(WAIT_CLEAR);
-      }
-      break;
-
-    case WAIT_CLEAR:
-      if (!hasTrashMedian()) {
-        Serial.println("Trash cleared, back to IDLE");
-        lastTrashDetected = false;
-        changeState(IDLE);
-      }
-      break;
-  }
+  runPeriodicTasks();
+  runStateMachine();
 }

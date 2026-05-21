@@ -111,6 +111,8 @@ const state = {
     date: null,
   },
 
+  firebase_daily_stats: [], // [{date, wet, dry, metal, total}]
+
   motor: {
     stepper_angle: 0,
     servo: "closed",
@@ -129,7 +131,11 @@ const state = {
 const pendingCommands = new Map();
 const wsClients = new Set();
 
-let lastTelemetryForSpike = null;
+// Rate-based alert: track classify timestamps per device
+const classifyTimestamps = new Map(); // deviceId -> [timestamp, ...]
+const RATE_WINDOW_MS = 10000;  // 10 seconds
+const RATE_THRESHOLD = 3;      // >= 3 classifies in window = alert
+
 let offlineTimer = null;
 
 // ======================
@@ -146,6 +152,16 @@ function nowISO() {
 
 function nowTime() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+function nowDateTime() {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${dd}/${mm} ${hh}:${mi}:${ss}`;
 }
 
 function todayKey() {
@@ -397,6 +413,36 @@ async function loadTodayStatsFromFirebase(deviceId) {
   }
 }
 
+async function loadAllDailyStatsFromFirebase(deviceId) {
+  if (!firebaseEnabled) return;
+
+  try {
+    const snap = await db
+      .collection("devices")
+      .doc(deviceId)
+      .collection("daily_stats")
+      .orderBy("date", "asc")
+      .get();
+
+    const allDays = [];
+    snap.forEach((doc) => {
+      const d = doc.data();
+      allDays.push({
+        date: nvl(d.date, doc.id),
+        wet: nvl(d.wet, 0),
+        dry: nvl(d.dry, 0),
+        metal: nvl(d.metal, 0),
+        total: nvl(d.total, 0),
+      });
+    });
+
+    state.firebase_daily_stats = allDays;
+    console.log("[Firebase] Loaded all daily_stats:", allDays.length, "days");
+  } catch (err) {
+    console.error("[Firebase] load all daily_stats failed:", err.message);
+  }
+}
+
 async function loadAllFirebaseState(deviceId) {
   await loadDeviceFromFirebase(deviceId);
 
@@ -435,6 +481,7 @@ async function loadAllFirebaseState(deviceId) {
     return {
       type: nvl(item.type, "event"),
       ts: nvl(item.ts, ""),
+      datetime: nvl(item.datetime, ""),
       msg: "Phân loại: " + nvl(item.type, "unknown"),
       created_at_iso: nvl(item.created_at_iso, ""),
     };
@@ -456,6 +503,7 @@ async function loadAllFirebaseState(deviceId) {
   state.command_ack_history = recentAcks;
 
   await loadTodayStatsFromFirebase(deviceId);
+  await loadAllDailyStatsFromFirebase(deviceId);
 
   console.log("[Firebase] Loaded all Firebase state:", {
     device_id: state.device_id,
@@ -565,48 +613,31 @@ function markOnline(deviceId) {
   }, 15000);
 }
 
-async function maybeCreateSpikeAlert(deviceId, data) {
-  if (!lastTelemetryForSpike) {
-    lastTelemetryForSpike = data;
-    return;
-  }
+async function maybeCreateRateAlert(deviceId) {
+  const now = Date.now();
+  const timestamps = classifyTimestamps.get(deviceId) || [];
 
-  const alerts = [];
+  // Add current timestamp
+  timestamps.push(now);
 
-  const prevDistance = Number(nvl(lastTelemetryForSpike.distance_cm, 999));
-  const currDistance = Number(nvl(data.distance_cm, 999));
-  const prevRain = Number(nvl(lastTelemetryForSpike.rain, 0));
-  const currRain = Number(nvl(data.rain, 0));
+  // Keep only timestamps within the window
+  const recent = timestamps.filter((t) => now - t <= RATE_WINDOW_MS);
+  classifyTimestamps.set(deviceId, recent);
 
-  if (Math.abs(prevDistance - currDistance) >= 30) {
-    alerts.push({
-      kind: "distance_spike",
-      bin: "sensor",
-      level: Math.abs(prevDistance - currDistance),
-      msg: "Khoảng cách đột biến: " + prevDistance + "cm → " + currDistance + "cm",
-    });
-  }
+  if (recent.length >= RATE_THRESHOLD) {
+    // Reset to avoid repeated alerts for same burst
+    classifyTimestamps.set(deviceId, []);
 
-  if (Math.abs(prevRain - currRain) >= 1500) {
-    alerts.push({
-      kind: "rain_spike",
-      bin: "sensor",
-      level: Math.abs(prevRain - currRain),
-      msg: "Cảm biến mưa đột biến: " + prevRain + " → " + currRain,
-    });
-  }
-
-  lastTelemetryForSpike = data;
-
-  for (const a of alerts) {
-    const alert = Object.assign(
-      {
-        event: "alert",
-        ts: nowTime(),
-        created_at_iso: nowISO(),
-      },
-      a
-    );
+    const alert = {
+      event: "alert",
+      kind: "rapid_trash",
+      bin: "system",
+      level: recent.length,
+      msg: `Rác bỏ vào quá liên tục: ${recent.length} lần trong ${RATE_WINDOW_MS / 1000} giây`,
+      ts: nowTime(),
+      datetime: nowDateTime(),
+      created_at_iso: nowISO(),
+    };
 
     state.alerts.unshift(alert);
     if (state.alerts.length > 50) state.alerts.pop();
@@ -625,6 +656,7 @@ function getClientInitPayload() {
     bins: state.bins,
     stats: state.stats,
     daily_stats: state.daily_stats,
+    firebase_daily_stats: state.firebase_daily_stats || [],
     motor: state.motor,
     alerts: state.alerts.slice(0, 10),
     history: state.history.slice(0, 30),
@@ -744,7 +776,6 @@ async function handleTelemetry(req, res, body) {
   });
 
   await saveDoc("devices/" + deviceId + "/telemetry", payload);
-  await maybeCreateSpikeAlert(deviceId, payload);
 
   broadcastWS(payload);
   jsonResponse(res, { ok: true }, "2.04");
@@ -767,7 +798,7 @@ async function handleClassify(req, res, body) {
   state.stats[type] = nvl(state.stats[type], 0) + 1;
   state.stats.total = nvl(state.stats.total, 0) + 1;
 
-  state.bins[type] = Math.min(100, nvl(state.bins[type], 0) + 5);
+  state.bins[type] = nvl(state.bins[type], 0) + 1;
 
   state.motor.stepper_angle = nvl(body.stepper_angle, stepperAngleByType(type));
   state.motor.servo = nvl(body.servo, "open→closed");
@@ -792,6 +823,7 @@ async function handleClassify(req, res, body) {
     rain: state.rain,
     metal_detected: state.metal_detected,
     ts: nowTime(),
+    datetime: nowDateTime(),
     created_at_iso: nowISO(),
     latency_ms: state.latency_ms,
   };
@@ -821,24 +853,16 @@ async function handleClassify(req, res, body) {
 
   await saveDoc("devices/" + deviceId + "/events", payload);
   await incrementDailyStats(deviceId, type);
+  await loadAllDailyStatsFromFirebase(deviceId);
 
-  if (state.bins[type] >= 80) {
-    const alert = {
-      event: "alert",
-      kind: "bin_full",
-      bin: type,
-      level: state.bins[type],
-      msg: "Thùng " + type + " sắp đầy",
-      ts: nowTime(),
-      created_at_iso: nowISO(),
-    };
+  // Broadcast updated daily stats to all clients
+  broadcastWS({
+    event: "daily_stats_update",
+    firebase_daily_stats: state.firebase_daily_stats,
+  });
 
-    state.alerts.unshift(alert);
-    if (state.alerts.length > 50) state.alerts.pop();
-
-    await saveDoc("devices/" + deviceId + "/alerts", alert);
-    broadcastWS(alert);
-  }
+  // Rate-based alert (not distance-based)
+  await maybeCreateRateAlert(deviceId);
 
   broadcastWS(payload);
   jsonResponse(res, { ok: true }, "2.04");
@@ -995,6 +1019,19 @@ coapServer.listen(COAP_PORT, () => {
   console.log("[CoAP] Waiting ESP32 packets...");
 });
 
+coapServer.on("error", (err) => {
+  console.warn("[CoAP] Server error (ignored):", err.message);
+});
+
+// Prevent crash on CoAP RetrySendError
+process.on("uncaughtException", (err) => {
+  if (err.constructor && err.constructor.name === "RetrySendError") {
+    console.warn("[CoAP] RetrySend timeout (ignored):", err.message);
+  } else {
+    console.error("[UNCAUGHT]", err);
+  }
+});
+
 // ======================
 // WEBSOCKET SERVER
 // ======================
@@ -1020,10 +1057,16 @@ wss.on("connection", async (ws) => {
         const deviceId = msg.device_id || DEVICE_ID_DEFAULT;
         const id = Date.now() + "-" + Math.floor(Math.random() * 10000);
 
+        // Map rotate commands to angle payload
+        let cmdPayload = msg.payload || {};
+        if (msg.cmd === "rotate_wet") cmdPayload = { angle: 120 };
+        else if (msg.cmd === "rotate_dry") cmdPayload = { angle: 0 };
+        else if (msg.cmd === "rotate_metal") cmdPayload = { angle: 240 };
+
         const command = {
           id,
           cmd: msg.cmd,
-          payload: msg.payload || {},
+          payload: cmdPayload,
           source: "web",
           created_at: nowISO(),
         };
@@ -1042,12 +1085,25 @@ wss.on("connection", async (ws) => {
           status: "pending",
         });
 
+        const cmdLabels = {
+          mode_auto: "Chuyển sang AUTO",
+          mode_manual: "Chuyển sang MANUAL",
+          auto_on: "Chuyển sang AUTO",
+          auto_off: "Chuyển sang MANUAL",
+          open_lid: "Mở nắp",
+          close_lid: "Đóng nắp",
+          rotate_wet: "Xoay → Thùng Ẩm (120°)",
+          rotate_dry: "Xoay → Thùng Khô (0°)",
+          rotate_metal: "Xoay → Kim loại (240°)",
+        };
+
         broadcastWS({
           event: "command_pending",
           id,
           cmd: command.cmd,
           ts: nowTime(),
-          msg: "Lệnh đã được server nhận, chờ ESP32 lấy qua CoAP",
+          datetime: nowDateTime(),
+          msg: cmdLabels[command.cmd] || ("Lệnh đã được server nhận: " + command.cmd),
         });
 
         return;
@@ -1112,6 +1168,47 @@ wss.on("connection", async (ws) => {
       if (msg.event === "get_status") {
         await loadAllFirebaseState(DEVICE_ID_DEFAULT);
         ws.send(JSON.stringify(getClientInitPayload()));
+        return;
+      }
+
+      if (msg.event === "get_day_events") {
+        const date = msg.date; // "YYYY-MM-DD"
+        const deviceId = msg.device_id || DEVICE_ID_DEFAULT;
+        if (!date || !firebaseEnabled) {
+          ws.send(JSON.stringify({ event: "day_events", date, events: [], stats: null }));
+          return;
+        }
+        try {
+          // Load events for this day (created_at_iso starts with date)
+          const startISO = date + "T00:00:00.000Z";
+          const endISO   = date + "T23:59:59.999Z";
+          const snap = await db
+            .collection("devices").doc(deviceId).collection("events")
+            .where("created_at_iso", ">=", startISO)
+            .where("created_at_iso", "<=", endISO)
+            .orderBy("created_at_iso", "desc")
+            .limit(100)
+            .get();
+          const events = [];
+          snap.forEach(doc => {
+            const d = doc.data();
+            events.push({
+              type: d.type || "unknown",
+              datetime: d.datetime || d.ts || "",
+              ts: d.ts || "",
+              created_at_iso: d.created_at_iso || "",
+            });
+          });
+          // Also load daily_stats for that day
+          const statsSnap = await db
+            .collection("devices").doc(deviceId)
+            .collection("daily_stats").doc(date).get();
+          const stats = statsSnap.exists ? statsSnap.data() : null;
+          ws.send(JSON.stringify({ event: "day_events", date, events, stats }));
+        } catch (err) {
+          console.error("[WS] get_day_events failed:", err.message);
+          ws.send(JSON.stringify({ event: "day_events", date, events: [], stats: null, error: err.message }));
+        }
         return;
       }
     } catch (err) {
