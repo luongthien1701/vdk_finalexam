@@ -136,6 +136,19 @@ const classifyTimestamps = new Map(); // deviceId -> [timestamp, ...]
 const RATE_WINDOW_MS = 10000;  // 10 seconds
 const RATE_THRESHOLD = 3;      // >= 3 classifies in window = alert
 
+// Telemetry-based anomaly detection
+const lastTelemetryByDevice = new Map(); // deviceId -> latest telemetry payload
+const metalOnSince = new Map();          // deviceId -> timestamp when metal sensor became active
+const alertCooldowns = new Map();        // key = deviceId:kind -> last alert timestamp
+
+const ANOMALY_CONFIG = {
+  distanceDropCm: 25,      // distance drops more than 25cm between 2 telemetry packets
+  rainChange: 1200,        // rain sensor changes too much between 2 telemetry packets
+  tooCloseCm: 8,           // object is too close to ultrasonic sensor
+  metalStuckMs: 15000,     // metal sensor stays ON longer than 15s
+  alertCooldownMs: 8000,   // avoid spamming the same alert kind
+};
+
 let offlineTimer = null;
 
 // ======================
@@ -647,6 +660,131 @@ async function maybeCreateRateAlert(deviceId) {
   }
 }
 
+async function createSystemAlert(deviceId, kind, msg, level = 1, extra = {}) {
+  const now = Date.now();
+  const cooldownKey = deviceId + ":" + kind;
+  const lastAlertAt = alertCooldowns.get(cooldownKey) || 0;
+
+  if (now - lastAlertAt < ANOMALY_CONFIG.alertCooldownMs) {
+    return;
+  }
+
+  alertCooldowns.set(cooldownKey, now);
+
+  const alert = Object.assign({
+    event: "alert",
+    device_id: deviceId,
+    kind,
+    bin: "system",
+    level,
+    msg,
+    ts: nowTime(),
+    datetime: nowDateTime(),
+    created_at_iso: nowISO(),
+  }, extra);
+
+  state.alerts.unshift(alert);
+  if (state.alerts.length > 50) state.alerts.pop();
+
+  await updateDeviceDoc(deviceId, {
+    last_alert: alert,
+  });
+
+  await saveDoc("devices/" + deviceId + "/alerts", alert);
+  broadcastWS(alert);
+}
+
+async function checkTelemetryAnomaly(deviceId, payload) {
+  const prev = lastTelemetryByDevice.get(deviceId);
+
+  const distance = Number(payload.distance_cm);
+  const rain = Number(payload.rain);
+  const metal = Boolean(payload.metal_detected);
+  const now = Date.now();
+
+  if (prev) {
+    const prevDistance = Number(prev.distance_cm);
+    const prevRain = Number(prev.rain);
+
+    if (
+      Number.isFinite(distance) &&
+      Number.isFinite(prevDistance) &&
+      prevDistance - distance >= ANOMALY_CONFIG.distanceDropCm
+    ) {
+      await createSystemAlert(
+        deviceId,
+        "distance_spike",
+        `Khoảng cách giảm đột ngột: ${prevDistance}cm → ${distance}cm`,
+        prevDistance - distance,
+        {
+          distance_cm: distance,
+          previous_distance_cm: prevDistance,
+        }
+      );
+    }
+
+    if (
+      Number.isFinite(rain) &&
+      Number.isFinite(prevRain) &&
+      Math.abs(rain - prevRain) >= ANOMALY_CONFIG.rainChange
+    ) {
+      await createSystemAlert(
+        deviceId,
+        "rain_spike",
+        `Cảm biến độ ẩm thay đổi bất thường: ${prevRain} → ${rain}`,
+        Math.abs(rain - prevRain),
+        {
+          rain,
+          previous_rain: prevRain,
+        }
+      );
+    }
+  }
+
+  if (Number.isFinite(distance) && distance > 0 && distance <= ANOMALY_CONFIG.tooCloseCm) {
+    await createSystemAlert(
+      deviceId,
+      "too_close",
+      `Vật thể quá gần cảm biến: ${distance}cm`,
+      distance,
+      {
+        distance_cm: distance,
+      }
+    );
+  }
+
+  if (metal) {
+    if (!metalOnSince.has(deviceId)) {
+      metalOnSince.set(deviceId, now);
+    } else {
+      const duration = now - metalOnSince.get(deviceId);
+
+      if (duration >= ANOMALY_CONFIG.metalStuckMs) {
+        metalOnSince.set(deviceId, now);
+
+        await createSystemAlert(
+          deviceId,
+          "metal_stuck",
+          `Cảm biến kim loại bật liên tục quá ${Math.round(duration / 1000)} giây`,
+          Math.round(duration / 1000),
+          {
+            metal_detected: true,
+          }
+        );
+      }
+    }
+  } else {
+    metalOnSince.delete(deviceId);
+  }
+
+  lastTelemetryByDevice.set(deviceId, {
+    distance_cm: payload.distance_cm,
+    rain: payload.rain,
+    metal_detected: payload.metal_detected,
+    ts_ms: now,
+  });
+}
+
 function getClientInitPayload() {
   return {
     event: "init",
@@ -764,6 +902,8 @@ async function handleTelemetry(req, res, body) {
     created_at_iso: nowISO(),
     latency_ms: state.latency_ms,
   };
+
+  await checkTelemetryAnomaly(deviceId, payload);
 
   await updateDeviceDoc(deviceId, {
     online: true,

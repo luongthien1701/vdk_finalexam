@@ -17,20 +17,23 @@
         }
         
         :root {
-            --bg: #0f1117;
-            --bg2: #181c27;
-            --bg3: #1e2335;
-            --bg4: #252b40;
-            --border: #2a3050;
-            --text: #e0e4f0;
-            --text2: #8892b0;
-            --text3: #4a5580;
-            --wet: #3b9ede;
-            --dry: #e8a020;
-            --metal: #7c6fdb;
-            --green: #22d987;
-            --red: #ff5c5c;
-            --amber: #ffb347;
+            --bg: #f5f7fb;
+            --bg2: #ffffff;
+            --bg3: #eef3fb;
+            --bg4: #e8eef8;
+            --card: #ffffff;
+            --border: #d7e0ee;
+            --text: #172033;
+            --text2: #52627a;
+            --text3: #7c8ba3;
+            --wet: #1677c8;
+            --dry: #c47a00;
+            --metal: #6454d6;
+            --green: #0f9f6e;
+            --red: #dc3f45;
+            --amber: #d18400;
+            --blue: #1677c8;
+            --shadow: 0 8px 22px rgba(31, 45, 72, .08);
             --r: 10px;
             --r2: 14px;
         }
@@ -57,6 +60,7 @@
         header {
             background: var(--bg2);
             border-bottom: 1px solid var(--border);
+            box-shadow: 0 2px 12px rgba(31, 45, 72, .06);
             padding: 12px 24px;
             display: flex;
             align-items: center;
@@ -101,12 +105,12 @@
         }
         
         .ws-badge.connected {
-            border-color: #22d98766;
+            border-color: color-mix(in srgb, var(--green) 45%, transparent);
             color: var(--green);
         }
         
         .ws-badge.error {
-            border-color: #ff5c5c66;
+            border-color: color-mix(in srgb, var(--red) 45%, transparent);
             color: var(--red);
         }
         
@@ -156,6 +160,7 @@
             padding: 14px 16px;
             position: relative;
             overflow: hidden;
+            box-shadow: var(--shadow);
         }
         
         .stat-card::before {
@@ -204,6 +209,7 @@
             padding: 18px;
             border-top: 3px solid var(--color);
             transition: border-color 0.3s;
+            box-shadow: var(--shadow);
         }
         
         .bin-head {
@@ -365,6 +371,7 @@
             border: 1px solid var(--border);
             border-radius: var(--r2);
             padding: 16px;
+            box-shadow: var(--shadow);
         }
         
         .card-title {
@@ -622,6 +629,80 @@
                 grid-template-columns: repeat(2, 1fr);
             }
         }
+        /* ── Realtime telemetry chart ───────────────────────── */
+        .realtime-chart {
+            height: 220px;
+            position: relative;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .realtime-chart svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .rt-grid {
+            stroke: var(--border);
+            stroke-width: 1;
+            opacity: .85;
+        }
+
+        .rt-axis {
+            stroke: var(--text3);
+            stroke-width: 1;
+            opacity: .75;
+        }
+
+        .rt-line {
+            fill: none;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .rt-area {
+            opacity: .12;
+        }
+
+        .rt-dot {
+            stroke: var(--card);
+            stroke-width: 2;
+        }
+
+        .rt-label {
+            font-size: 9px;
+            color: var(--text3);
+            fill: var(--text3);
+        }
+
+        .alert-list {
+            max-height: 180px;
+            overflow-y: auto;
+        }
+
+        .alert-item {
+            display: flex;
+            gap: 8px;
+            padding: 7px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+        }
+
+        .alert-time {
+            color: var(--text3);
+            font-family: monospace;
+            white-space: nowrap;
+        }
+
+        .alert-text {
+            color: var(--red);
+            flex: 1;
+            line-height: 1.4;
+        }
+
         /* ── Alert banner ──────────────────────────────────────── */
         
         #alert-banner {
@@ -732,32 +813,32 @@
 
             <!-- ── Stats row ──────────────────────────────────── -->
             <div class="stats-grid">
-                <div class="stat-card" style="--accent:#22d987">
+                <div class="stat-card" style="--accent:var(--green)">
                     <div class="stat-val" id="s-total">0</div>
                     <div class="stat-lbl">Tổng phân loại</div>
                     <div class="stat-sub" id="s-today">Hôm nay</div>
                 </div>
-                <div class="stat-card" style="--accent:#3b9ede">
+                <div class="stat-card" style="--accent:var(--wet)">
                     <div class="stat-val" id="s-wet">0</div>
                     <div class="stat-lbl">Rác ẩm</div>
                     <div class="stat-sub">lần phân loại</div>
                 </div>
-                <div class="stat-card" style="--accent:#e8a020">
+                <div class="stat-card" style="--accent:var(--dry)">
                     <div class="stat-val" id="s-dry">0</div>
                     <div class="stat-lbl">Rác khô</div>
                     <div class="stat-sub">lần phân loại</div>
                 </div>
-                <div class="stat-card" style="--accent:#7c6fdb">
+                <div class="stat-card" style="--accent:var(--metal)">
                     <div class="stat-val" id="s-metal">0</div>
                     <div class="stat-lbl">Kim loại</div>
                     <div class="stat-sub">lần phân loại</div>
                 </div>
-                <div class="stat-card" style="--accent:#ffb347">
+                <div class="stat-card" style="--accent:var(--amber)">
                     <div class="stat-val"><span id="s-latency">—</span><span style="font-size:14px">ms</span></div>
                     <div class="stat-lbl">Độ trễ CoAP</div>
                     <div class="stat-sub">RTT gần nhất</div>
                 </div>
-                <div class="stat-card" style="--accent:#ff5c5c">
+                <div class="stat-card" style="--accent:var(--red)">
                     <div class="stat-val" id="s-alerts">0</div>
                     <div class="stat-lbl">Cảnh báo</div>
                     <div class="stat-sub">chưa xử lý</div>
@@ -817,6 +898,35 @@
                         <div class="sensor-mini">
                             <div class="label">Metal</div>
                             <div class="value" id="live-metal">—</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Realtime Charts + Alerts ─────────────────────── -->
+            <div class="bottom-grid" style="margin-bottom:20px">
+                <div class="card">
+                    <div class="card-title">Biểu đồ cảm biến realtime theo timestamp</div>
+                    <div class="realtime-chart" id="realtime-chart">
+                        <div style="color:var(--text3);font-size:12px;padding:30px 0;text-align:center;width:100%">
+                            Đang chờ telemetry từ ESP32...
+                        </div>
+                    </div>
+                    <div class="chart-legend">
+                        <div class="leg">
+                            <div class="leg-dot" style="background:var(--green)"></div>Distance
+                        </div>
+                        <div class="leg">
+                            <div class="leg-dot" style="background:var(--wet)"></div>Rain / Độ ẩm
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Cảnh báo bất thường realtime</div>
+                    <div class="alert-list" id="realtime-alert-list">
+                        <div style="color:var(--text3);font-size:12px;padding:20px 0;text-align:center">
+                            Chưa có cảnh báo bất thường.
                         </div>
                     </div>
                 </div>
@@ -986,15 +1096,19 @@
 
     <script>
         // ── Config ──────────────────────────────────────────────────
-        const WS_URL = `ws://192.168.175.183:8765`;
+        const WS_URL = `ws://192.168.1.185:8765`;
         const RECONNECT_DELAY = 3000;
 
         // ── State ───────────────────────────────────────────────────
         let ws = null;
         let reconnectTimer = null;
         let alertCount = 0;
+        const realtimeTelemetry = [];
+        const MAX_RT_POINTS = 24;
+        let realtimeAlertCount = 0;
         // binItems: number of trash items currently shown per bin
         const binItems = { wet: 0, dry: 0, metal: 0 };
+        const todayStats = { wet: 0, dry: 0, metal: 0, total: 0 };
         // realtime bins (always updated from server, regardless of selected day)
         const realtimeBins = { wet: 0, dry: 0, metal: 0 };
         const BIN_ICONS = { wet: '💧', dry: '📄', metal: '🔩' };
@@ -1036,6 +1150,144 @@
             };
         }
 
+        function pushRealtimeTelemetry(msg) {
+            const item = {
+                ts: msg.ts || new Date().toLocaleTimeString('vi-VN', { hour12: false }),
+                distance_cm: Number(msg.distance_cm ?? msg.telemetry?.distance_cm ?? 0),
+                rain: Number(msg.rain ?? msg.telemetry?.rain ?? 0),
+                metal_detected: Boolean(msg.metal_detected ?? msg.telemetry?.metal_detected),
+                trash_detected: Boolean(msg.trash_detected ?? msg.telemetry?.trash_detected),
+            };
+
+            realtimeTelemetry.push(item);
+
+            while (realtimeTelemetry.length > MAX_RT_POINTS) {
+                realtimeTelemetry.shift();
+            }
+
+            renderRealtimeChart();
+        }
+
+        function renderRealtimeChart() {
+            const wrap = document.getElementById('realtime-chart');
+            if (!wrap) return;
+
+            if (realtimeTelemetry.length === 0) {
+                wrap.innerHTML = `
+                    <div style="color:var(--text3);font-size:12px;padding:30px 0;text-align:center;width:100%">
+                        Đang chờ telemetry từ ESP32...
+                    </div>
+                `;
+                return;
+            }
+
+            const width = 640;
+            const height = 210;
+            const pad = { top: 16, right: 18, bottom: 34, left: 42 };
+            const plotW = width - pad.left - pad.right;
+            const plotH = height - pad.top - pad.bottom;
+            const points = realtimeTelemetry.length;
+            const maxDistance = Math.max(120, ...realtimeTelemetry.map(p => Number(p.distance_cm) || 0));
+            const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+            const escapeHtml = (value) => String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            const xFor = (i) => pad.left + (points === 1 ? plotW : (i / (points - 1)) * plotW);
+            const yForDistance = (value) => pad.top + plotH - (clamp(value, 0, maxDistance) / maxDistance) * plotH;
+            const yForMoisture = (raw) => {
+                const moisturePct = (4095 - clamp(Number(raw) || 0, 0, 4095)) / 4095 * 100;
+                return pad.top + plotH - (moisturePct / 100) * plotH;
+            };
+            const pathFor = (yFor) => realtimeTelemetry.map((p, i) => {
+                const x = xFor(i).toFixed(1);
+                const y = yFor(p).toFixed(1);
+                return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+            }).join(' ');
+            const distancePath = pathFor(p => yForDistance(Number(p.distance_cm) || 0));
+            const rainPath = pathFor(p => yForMoisture(p.rain));
+            const areaFor = (path) => `${path} L ${xFor(points - 1).toFixed(1)} ${pad.top + plotH} L ${xFor(0).toFixed(1)} ${pad.top + plotH} Z`;
+            const labelEvery = Math.max(1, Math.ceil(points / 6));
+
+            const grid = [0, 25, 50, 75, 100].map(pct => {
+                const y = pad.top + plotH - (pct / 100) * plotH;
+                return `
+                    <line class="rt-grid" x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}"></line>
+                    <text class="rt-label" x="8" y="${y + 3}">${pct}</text>
+                `;
+            }).join('');
+
+            const timeLabels = realtimeTelemetry.map((p, i) => {
+                if (i !== 0 && i !== points - 1 && i % labelEvery !== 0) return '';
+                const x = xFor(i);
+                return `<text class="rt-label" x="${x}" y="${height - 10}" text-anchor="middle">${escapeHtml(p.ts)}</text>`;
+            }).join('');
+
+            const dots = realtimeTelemetry.map((p, i) => {
+                const x = xFor(i);
+                const distY = yForDistance(Number(p.distance_cm) || 0);
+                const rainY = yForMoisture(p.rain);
+                const moisturePct = Math.round((4095 - clamp(Number(p.rain) || 0, 0, 4095)) / 4095 * 100);
+                const title =
+                    `Time: ${p.ts}\n` +
+                    `Distance: ${p.distance_cm}cm\n` +
+                    `Rain raw: ${p.rain}\n` +
+                    `Độ ẩm quy đổi: ${moisturePct}%\n` +
+                    `Metal: ${p.metal_detected ? 'YES' : 'NO'}\n` +
+                    `Trash: ${p.trash_detected ? 'YES' : 'NO'}`;
+                return `
+                    <circle class="rt-dot" cx="${x}" cy="${distY}" r="4" fill="var(--green)">
+                        <title>${escapeHtml(title)}</title>
+                    </circle>
+                    <circle class="rt-dot" cx="${x}" cy="${rainY}" r="4" fill="var(--wet)">
+                        <title>${escapeHtml(title)}</title>
+                    </circle>
+                `;
+            }).join('');
+
+            wrap.innerHTML = `
+                <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Biểu đồ đường realtime của cảm biến distance và rain">
+                    ${grid}
+                    <line class="rt-axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top + plotH}"></line>
+                    <line class="rt-axis" x1="${pad.left}" y1="${pad.top + plotH}" x2="${width - pad.right}" y2="${pad.top + plotH}"></line>
+                    <path class="rt-area" d="${areaFor(distancePath)}" fill="var(--green)"></path>
+                    <path class="rt-area" d="${areaFor(rainPath)}" fill="var(--wet)"></path>
+                    <path class="rt-line" d="${distancePath}" stroke="var(--green)"></path>
+                    <path class="rt-line" d="${rainPath}" stroke="var(--wet)"></path>
+                    ${dots}
+                    ${timeLabels}
+                    <text class="rt-label" x="${width - pad.right}" y="${pad.top + 10}" text-anchor="end">Distance max ${Math.round(maxDistance)}cm</text>
+                </svg>
+            `;
+        }
+
+        function addRealtimeAlert(msg) {
+            const wrap = document.getElementById('realtime-alert-list');
+            if (!wrap) return;
+
+            if (realtimeAlertCount === 0) {
+                wrap.innerHTML = '';
+            }
+
+            realtimeAlertCount++;
+
+            const div = document.createElement('div');
+            div.className = 'alert-item flash';
+
+            div.innerHTML = `
+                <span class="alert-time">${msg.datetime || msg.ts || '--:--:--'}</span>
+                <span class="alert-text">${msg.msg || 'Cảnh báo bất thường'}</span>
+            `;
+
+            wrap.insertBefore(div, wrap.firstChild);
+
+            while (wrap.children.length > 20) {
+                wrap.removeChild(wrap.lastChild);
+            }
+        }
+
         function handleMessage(msg) {
 
             if (msg.event === 'state') {
@@ -1051,6 +1303,7 @@
 
             if (msg.event === 'telemetry') {
                 updateLiveSensors(msg);
+                pushRealtimeTelemetry(msg);
                 if (msg.latency_ms !== undefined) document.getElementById('s-latency').textContent = msg.latency_ms;
                 setIndicator('ind-coap', 'var(--green)');
                 document.getElementById('val-coap').textContent = `Telemetry · ${msg.ts || ''}`;
@@ -1082,6 +1335,23 @@
 
             if (msg.event === 'init') {
                 updateLiveSensors(msg);
+
+                if (msg.telemetry_history) {
+                    msg.telemetry_history.slice().reverse().forEach(t => {
+                        pushRealtimeTelemetry({
+                            ts: t.ts,
+                            distance_cm: t.distance_cm,
+                            rain: t.rain,
+                            metal_detected: t.metal_detected,
+                            trash_detected: t.trash_detected,
+                        });
+                    });
+                }
+
+                if (msg.alerts) {
+                    msg.alerts.slice().reverse().forEach(a => addRealtimeAlert(a));
+                }
+
                 if (msg.firebase_daily_stats) {
                     firebaseDailyStats = msg.firebase_daily_stats;
                     renderChart();
@@ -1106,14 +1376,14 @@
 
                 if (selectedDate === null) {
                     // Viewing today: add item live
-                    addTrashItem(type);
+                    if (!msg.stats) addTrashItem(type);
                 } else {
                     // Viewing another day: alert + switch to today
                     alertCount++;
                     document.getElementById('s-alerts').textContent = alertCount;
                     showAlert(`⚠️ Có rác mới hôm nay (${type === 'wet' ? 'Rác ẩm' : type === 'dry' ? 'Rác khô' : 'Kim loại'}) — Đang chuyển về hôm nay`);
                     selectToday();
-                    addTrashItem(type);
+                    if (!msg.stats) addTrashItem(type);
                 }
 
                 if (msg.stats) updateStats(msg.stats);
@@ -1141,7 +1411,9 @@
                 alertCount++;
                 document.getElementById('s-alerts').textContent = alertCount;
                 showAlert(msg.msg || `Cảnh báo: ${msg.kind}`);
+                addRealtimeAlert(msg);
                 addLogEntry('alert', msg.datetime || msg.ts, true, msg.msg);
+                return;
             }
 
             if (msg.event === 'stats_reset') {
@@ -1161,11 +1433,6 @@
             ['wet', 'dry', 'metal'].forEach(type => {
                 const count = bins[type] || 0;
                 realtimeBins[type] = count;
-                // Only update binItems display if viewing today
-                if (selectedDate === null) {
-                    binItems[type] = count;
-                    renderBinItems(type);
-                }
             });
         }
 
@@ -1219,13 +1486,22 @@
         }
 
         function updateStats(stats) {
-            document.getElementById('s-total').textContent = stats.total || 0;
-            document.getElementById('s-wet').textContent = stats.wet || 0;
-            document.getElementById('s-dry').textContent = stats.dry || 0;
-            document.getElementById('s-metal').textContent = stats.metal || 0;
-            document.getElementById('count-wet').textContent = stats.wet || 0;
-            document.getElementById('count-dry').textContent = stats.dry || 0;
-            document.getElementById('count-metal').textContent = stats.metal || 0;
+            todayStats.wet = stats.wet || 0;
+            todayStats.dry = stats.dry || 0;
+            todayStats.metal = stats.metal || 0;
+            todayStats.total = stats.total || 0;
+
+            document.getElementById('s-total').textContent = todayStats.total;
+            document.getElementById('s-wet').textContent = todayStats.wet;
+            document.getElementById('s-dry').textContent = todayStats.dry;
+            document.getElementById('s-metal').textContent = todayStats.metal;
+
+            if (selectedDate === null) {
+                binItems.wet = todayStats.wet;
+                binItems.dry = todayStats.dry;
+                binItems.metal = todayStats.metal;
+                ['wet','dry','metal'].forEach(t => renderBinItems(t));
+            }
         }
 
         function updateMotor(motor) {
@@ -1242,38 +1518,38 @@
         const TYPE_CONFIG = {
             wet: {
                 color: 'var(--wet)',
-                dot: '#3b9ede',
+                dot: '#1677c8',
                 label: 'Rác ẩm',
                 tag: 'ẨM',
-                tagStyle: 'background:#1a3d5c;color:#3b9ede'
+                tagStyle: 'background:#dff0ff;color:#1677c8'
             },
             dry: {
                 color: 'var(--dry)',
-                dot: '#e8a020',
+                dot: '#c47a00',
                 label: 'Rác khô',
                 tag: 'KHÔ',
-                tagStyle: 'background:#4a3800;color:#e8a020'
+                tagStyle: 'background:#fff1d6;color:#c47a00'
             },
             metal: {
                 color: 'var(--metal)',
-                dot: '#7c6fdb',
+                dot: '#6454d6',
                 label: 'Kim loại',
                 tag: 'KL',
-                tagStyle: 'background:#2a2550;color:#7c6fdb'
+                tagStyle: 'background:#e9e7ff;color:#6454d6'
             },
             alert: {
                 color: 'var(--red)',
-                dot: '#ff5c5c',
+                dot: '#dc3f45',
                 label: 'Cảnh báo',
                 tag: 'CẢNH BÁO',
-                tagStyle: 'background:#4a1010;color:#ff5c5c'
+                tagStyle: 'background:#ffe1e3;color:#dc3f45'
             },
             state: {
                 color: 'var(--green)',
-                dot: '#22d987',
+                dot: '#0f9f6e',
                 label: 'Trạng thái',
                 tag: 'STATE',
-                tagStyle: 'background:#123b2a;color:#22d987'
+                tagStyle: 'background:#dff7ed;color:#0f9f6e'
             },
         };
 
@@ -1417,10 +1693,10 @@
             selectedDate = null;
             document.getElementById('day-view-bar').style.display = 'none';
             document.getElementById('day-detail').style.display = 'none';
-            // Restore realtime bin counts
-            binItems.wet   = realtimeBins.wet   || 0;
-            binItems.dry   = realtimeBins.dry   || 0;
-            binItems.metal = realtimeBins.metal || 0;
+            // Restore today's classification counts, not physical bin level counts.
+            binItems.wet   = todayStats.wet   || 0;
+            binItems.dry   = todayStats.dry   || 0;
+            binItems.metal = todayStats.metal || 0;
             ['wet','dry','metal'].forEach(t => renderBinItems(t));
         }
 
