@@ -10,14 +10,14 @@
 const char* WIFI_SSID = "ba";
 const char* WIFI_PASS = "123456789";
 
-IPAddress SERVER_IP(192, 168, 175, 183);
+IPAddress SERVER_IP(20, 189, 124, 16);
 const int COAP_PORT = 5683;
 
-#define TRIG_PIN   18
-#define ECHO_PIN   19
-#define METAL_PIN  2
-#define RAIN_PIN   0
-#define SERVO_PIN  3
+#define TRIG_PIN 18
+#define ECHO_PIN 19
+#define METAL_PIN 2
+#define RAIN_PIN 0
+#define SERVO_PIN 3
 
 #define IN1 4
 #define IN2 5
@@ -77,6 +77,37 @@ enum Mode {
   AUTO,
   MANUAL
 };
+enum CommandType {
+  CMD_NONE,
+  CMD_AUTO,
+  CMD_MANUAL,
+  CMD_OPEN_LID,
+  CMD_CLOSE_LID,
+  CMD_RESET_HOME,
+  CMD_CLASSIFY_NOW,
+  CMD_ROTATE_DRY,
+  CMD_ROTATE_WET,
+  CMD_ROTATE_METAL,
+  CMD_UNKNOWN
+};
+
+enum CommandState {
+  CMD_RECEIVED,
+  CMD_VALIDATE,
+  CMD_EXECUTE,
+  CMD_ACK,
+  CMD_DONE
+};
+
+struct CommandContext {
+  String id;
+  String raw;
+  CommandType type = CMD_NONE;
+  CommandState state = CMD_RECEIVED;
+
+  const char* ackStatus = "done";
+  const char* ackMsg = "";
+};
 
 State state = INIT;
 Trash trash = NONE;
@@ -135,7 +166,11 @@ void servoOpen() {
 void servoClose() {
   lidServo.write(SERVO_CLOSE);
 }
-
+void clearTrashStatus() {
+  trashDetected = false;
+  metalDetected = false;
+  trash = NONE;
+}
 void stepperTo(int steps) {
   int delta = steps - currentSteps;
 
@@ -207,6 +242,10 @@ void sendState(const char* msg) {
 
 void sendTelemetry() {
   StaticJsonDocument<128> doc;
+
+  rainValue = analogRead(RAIN_PIN);
+  // Nếu muốn distance cũng realtime thì mở dòng này
+  readDistance();
 
   addStatus(doc);
 
@@ -392,8 +431,12 @@ void runStateMachine() {
 
     case WAIT_CLEAR:
       if (!hasTrash()) {
-        trashDetected = false;
-        go(IDLE, "Trash cleared");
+        clearTrashStatus();
+
+        sendState("Trash cleared");
+        sendTelemetry();
+
+        go(IDLE, "Ready");
       }
       break;
   }
@@ -401,37 +444,7 @@ void runStateMachine() {
 
 // ================= COMMAND FSM =================
 
-enum CommandType {
-  CMD_NONE,
-  CMD_AUTO,
-  CMD_MANUAL,
-  CMD_OPEN_LID,
-  CMD_CLOSE_LID,
-  CMD_RESET_HOME,
-  CMD_CLASSIFY_NOW,
-  CMD_ROTATE_DRY,
-  CMD_ROTATE_WET,
-  CMD_ROTATE_METAL,
-  CMD_UNKNOWN
-};
 
-enum CommandState {
-  CMD_RECEIVED,
-  CMD_VALIDATE,
-  CMD_EXECUTE,
-  CMD_ACK,
-  CMD_DONE
-};
-
-struct CommandContext {
-  String id;
-  String raw;
-  CommandType type = CMD_NONE;
-  CommandState state = CMD_RECEIVED;
-
-  const char* ackStatus = "done";
-  const char* ackMsg = "";
-};
 
 CommandType parseCommand(const String& cmd) {
   if (cmd == "auto_on" || cmd == "mode_auto") return CMD_AUTO;
@@ -448,9 +461,7 @@ CommandType parseCommand(const String& cmd) {
 }
 
 bool isRotateCommand(CommandType type) {
-  return type == CMD_ROTATE_DRY ||
-         type == CMD_ROTATE_WET ||
-         type == CMD_ROTATE_METAL;
+  return type == CMD_ROTATE_DRY || type == CMD_ROTATE_WET || type == CMD_ROTATE_METAL;
 }
 
 Trash trashFromCommand(CommandType type) {
